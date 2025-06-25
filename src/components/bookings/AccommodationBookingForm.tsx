@@ -76,26 +76,24 @@ export function AccommodationBookingForm({
   const totalPrice = pricePerNight * nights
   
   const handlePaymentSuccess = async (paymentIntentId: string) => {
-    // Create booking after payment success
-    if (onSubmit) {
-      onSubmit({
-        hotelId: accommodationId,
-        hotelName: accommodationName,
-        checkIn: dateRange!.from!,
-        checkOut: dateRange!.to!,
-        roomType: "Standard",
-        guests,
-      })
-    }
-
-    toast.success("Reserva confirmada e pagamento aprovado!", {
+    // Important: Payment approved but booking is created with "pending" status
+    // Partner/Employee needs to confirm the booking
+    
+    toast.success("Pagamento aprovado!", {
       description: `${formatCurrency(totalPrice)} pagos com sucesso.`,
-    })
+    });
 
     // Reset form
     setDateRange({ from: undefined, to: undefined })
     setGuests(2)
     setPaymentOpen(false)
+    
+    // Show booking status information
+    setTimeout(() => {
+      toast.success("Solicitação de reserva enviada!", {
+        description: "Aguardando confirmação do estabelecimento. Você receberá um email quando a reserva for confirmada.",
+      });
+    }, 2000);
   }
 
   const handleSubmit = async () => {
@@ -264,7 +262,20 @@ export function AccommodationBookingForm({
           <DialogTitle>Pagamento da Reserva</DialogTitle>
           <DialogDescription>Complete o pagamento para confirmar a reserva.</DialogDescription>
           <StripeProvider>
-            <BookingPaymentForm amountCents={totalPrice * 100} onSuccess={handlePaymentSuccess} />
+            <BookingPaymentForm 
+              amountCents={totalPrice * 100} 
+              bookingType="accommodation"
+              bookingData={{
+                accommodationId,
+                accommodationName,
+                checkInDate: dateRange?.from?.toISOString(),
+                checkOutDate: dateRange?.to?.toISOString(),
+                guests,
+                roomType: "Standard",
+                totalPrice,
+              }}
+              onSuccess={handlePaymentSuccess} 
+            />
           </StripeProvider>
         </DialogContent>
       </Dialog>

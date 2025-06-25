@@ -7,11 +7,19 @@ import { toast } from "sonner";
 
 export interface BookingPaymentFormProps {
   amountCents: number;
+  bookingType: "activity" | "event" | "vehicle" | "accommodation" | "package" | "restaurant";
+  bookingData: any;
   onSuccess: (paymentIntentId: string) => Promise<void> | void;
   customerId?: string;
 }
 
-export default function BookingPaymentForm({ amountCents, onSuccess, customerId }: BookingPaymentFormProps) {
+export default function BookingPaymentForm({ 
+  amountCents, 
+  bookingType,
+  bookingData,
+  onSuccess, 
+  customerId 
+}: BookingPaymentFormProps) {
   const stripe = useStripe();
   const elements = useElements();
   const [loading, setLoading] = useState(false);
@@ -36,10 +44,20 @@ export default function BookingPaymentForm({ amountCents, onSuccess, customerId 
     try {
       setLoading(true);
 
+      // Create Payment Intent with booking metadata
       const res = await fetch("/api/stripe/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: amountCents, customerId }),
+        body: JSON.stringify({ 
+          amount: amountCents, 
+          customerId,
+          bookingType,
+          bookingData,
+          metadata: {
+            source: "booking_form",
+            timestamp: new Date().toISOString(),
+          }
+        }),
       });
 
       const { clientSecret, error } = await res.json();
@@ -59,7 +77,11 @@ export default function BookingPaymentForm({ amountCents, onSuccess, customerId 
       }
 
       toast.success("Pagamento aprovado!");
+      
+      // Important: Don't create booking here - webhook will handle it
+      // Just call success callback for UI updates
       await onSuccess(paymentIntent!.id);
+      
     } catch (err: any) {
       console.error(err);
       toast.error(err.message ?? "Erro no pagamento");
