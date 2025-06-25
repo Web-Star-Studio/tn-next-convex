@@ -3,7 +3,7 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true
   },
-  trailingSlash: true,
+  trailingSlash: false,
   // Timeout de geração de páginas estáticas (em segundos)
   staticPageGenerationTimeout: 1000,
   images: {

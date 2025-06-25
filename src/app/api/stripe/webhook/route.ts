@@ -9,15 +9,29 @@ export const runtime = "nodejs";
 // Initialize Convex client for server-side operations
 const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 
+// Health check endpoint
+export async function GET() {
+  return NextResponse.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    message: "Stripe webhook endpoint is running" 
+  });
+}
+
 export async function POST(req: NextRequest) {
+  console.log("🔔 Webhook received at:", new Date().toISOString());
+  console.log("🔔 Request URL:", req.url);
+  console.log("🔔 Request method:", req.method);
+  
   const sig = req.headers.get("stripe-signature");
   if (!sig) {
+    console.error("❌ Missing stripe-signature header");
     return NextResponse.json({ error: "Missing stripe-signature header" }, { status: 400 });
   }
 
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    console.error("STRIPE_WEBHOOK_SECRET not set");
+    console.error("❌ STRIPE_WEBHOOK_SECRET not set");
     return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
   }
 
@@ -26,13 +40,25 @@ export async function POST(req: NextRequest) {
 
   try {
     event = stripe.webhooks.constructEvent(bodyText, sig, webhookSecret);
+    console.log("✅ Webhook signature verified successfully");
+    console.log("📋 Event type:", event.type);
+    console.log("📋 Event ID:", event.id);
   } catch (err: any) {
-    console.error("Webhook signature verification failed.", err.message);
+    console.error("❌ Webhook signature verification failed:", err.message);
     return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
   }
 
   try {
     switch (event.type) {
+      case "payment_intent.created": {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        console.log("📝 PaymentIntent created:", intent.id);
+        console.log("💰 Amount:", intent.amount, intent.currency);
+        console.log("📊 Status:", intent.status);
+        // Just log the creation, no action needed
+        break;
+      }
+      
       case "payment_intent.succeeded": {
         const intent = event.data.object as Stripe.PaymentIntent;
         console.log("💰 PaymentIntent succeeded:", intent.id);
