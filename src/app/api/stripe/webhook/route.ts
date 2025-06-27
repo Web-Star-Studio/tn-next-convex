@@ -161,8 +161,22 @@ export async function POST(req: NextRequest) {
         }
         break;
       }
-      
 
+      // Payment Link events
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        console.log("💳 Checkout session completed:", session.id);
+        console.log("💰 Amount:", session.amount_total, session.currency);
+        console.log("🎯 Payment status:", session.payment_status);
+        
+        // Check if this came from a payment link for asset reservation
+        const { assetType, assetId, flow } = session.metadata || {};
+        
+        if (flow === "asset_reservation" && assetType && assetId) {
+          await createReservationFromPaymentLink(session, assetType, assetId);
+        }
+        break;
+      }
       
       default:
         console.log(`Unhandled event type ${event.type}`);
@@ -296,6 +310,96 @@ async function createBookingAfterPayment(
     }
   } catch (error) {
     console.error(`Failed to create ${bookingType} booking:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Create reservation after successful payment via Payment Link
+ * Status: "paid" - payment was successful, now ready for partner confirmation
+ */
+async function createReservationFromPaymentLink(
+  session: Stripe.Checkout.Session,
+  assetType: string,
+  assetId: string
+) {
+  try {
+    console.log(`🔄 Creating ${assetType} reservation from payment link:`, session.id);
+
+    if (session.payment_status !== "paid") {
+      console.warn(`Payment not completed for session: ${session.id}`);
+      return;
+    }
+
+    // Get customer information from session
+    const customerInfo = {
+      name: session.customer_details?.name || "Cliente",
+      email: session.customer_details?.email || "",
+      phone: session.customer_details?.phone || "",
+    };
+
+    // Basic reservation data
+    const baseReservationData = {
+      status: "paid", // Payment is done, but still needs partner confirmation
+      paymentStatus: "paid",
+      paymentMethod: "credit_card",
+      totalPrice: (session.amount_total || 0) / 100, // Convert cents to currency
+      customerInfo,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      // Generate confirmation code
+      confirmationCode: `${assetType.toUpperCase().substring(0,3)}-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`,
+    };
+
+    // Call appropriate booking mutation based on asset type
+    switch (assetType) {
+      case "activity":
+        await convex.mutation(api.domains.bookings.mutations.createActivityBookingFromPaymentLink, {
+          activityId: assetId,
+          sessionId: session.id,
+          ...baseReservationData,
+        });
+        break;
+      
+      case "event":
+        await convex.mutation(api.domains.bookings.mutations.createEventBookingFromPaymentLink, {
+          eventId: assetId,
+          sessionId: session.id,
+          ...baseReservationData,
+        });
+        break;
+      
+      case "restaurant":
+        await convex.mutation(api.domains.bookings.mutations.createRestaurantReservationFromPaymentLink, {
+          restaurantId: assetId,
+          sessionId: session.id,
+          ...baseReservationData,
+        });
+        break;
+      
+      case "vehicle":
+        await convex.mutation(api.domains.bookings.mutations.createVehicleBookingFromPaymentLink, {
+          vehicleId: assetId,
+          sessionId: session.id,
+          ...baseReservationData,
+        });
+        break;
+      
+      case "accommodation":
+        await convex.mutation(api.domains.bookings.mutations.createAccommodationBookingFromPaymentLink, {
+          accommodationId: assetId,
+          sessionId: session.id,
+          ...baseReservationData,
+        });
+        break;
+      
+      default:
+        throw new Error(`Unknown asset type: ${assetType}`);
+    }
+
+    console.log(`✅ ${assetType} reservation created successfully from payment link`);
+  } catch (error) {
+    console.error(`Failed to create ${assetType} reservation from payment link:`, error);
     throw error;
   }
 } 

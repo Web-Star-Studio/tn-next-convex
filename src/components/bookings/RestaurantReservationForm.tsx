@@ -3,9 +3,7 @@
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { Calendar as CalendarIcon, Users, Clock, Plus, Minus, MapPin } from "lucide-react";
-import { useMutation } from "convex/react";
-import { api } from "../../../convex/_generated/api";
+import { Calendar as CalendarIcon, Users, Clock, Plus, Minus } from "lucide-react";
 import type { Id } from "@/../convex/_generated/dataModel";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 
@@ -26,16 +24,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { cardStyles, buttonStyles, formStyles } from "@/lib/ui-config";
-import PaymentWrapper from "@/components/payments/PaymentWrapper";
+import { PaymentLinkBookingButton } from "@/components/payments/PaymentLinkBookingButton";
+import { useAssetPaymentLink } from "@/hooks/useAssetPaymentLink";
 
 interface RestaurantReservationFormProps {
   restaurantId: Id<"restaurants">;
@@ -80,16 +72,24 @@ export function RestaurantReservationForm({
   });
   const [phoneInput, setPhoneInput] = useState(""); // Campo separado para telefone editável
   const [specialRequests, setSpecialRequests] = useState("");
-  const [paymentOpen, setPaymentOpen] = useState(false);
 
   // Get current user information
   const { user, isLoading: userLoading } = useCurrentUser();
+
+  // Get asset payment link info
+  const { 
+    asset, 
+    isLoading: assetLoading, 
+    hasPaymentLink, 
+    paymentLinkUrl,
+    isAssetActive 
+  } = useAssetPaymentLink("restaurant", restaurantId);
   
   // Gerar horários disponíveis entre 18h e 22h com intervalo de 30min
   const availableTimes = [
     "18:00", "18:30", "19:00", "19:30", 
     "20:00", "20:30", "21:00", "21:30", "22:00"
-  ]
+  ];
   
   const totalPrice = RESERVATION_FEE;
 
@@ -105,59 +105,73 @@ export function RestaurantReservationForm({
     }
   }, [user, userLoading]);
   
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const validateForm = () => {
     if (!date) {
       toast.error("Selecione uma data");
-      return;
+      return false;
     }
 
     if (!time) {
       toast.error("Selecione um horário");
-      return;
+      return false;
     }
 
     if (!user) {
       toast.error("Você precisa estar logado para fazer uma reserva");
-      return;
+      return false;
     }
 
     if (!customerInfo.name || !customerInfo.email) {
       toast.error("Informações do usuário incompletas. Verifique seu perfil.");
-      return;
+      return false;
     }
 
     if (!phoneInput.trim()) {
       toast.error("Por favor, preencha seu telefone para continuar");
-      return;
+      return false;
     }
 
-    // Open payment dialog instead of creating reservation directly
-    setPaymentOpen(true);
+    if (!hasPaymentLink) {
+      toast.error("Sistema de pagamento não configurado para este restaurante");
+      return false;
+    }
+
+    return true;
   };
 
-  const handlePaymentSuccess = async (paymentIntentId: string) => {
-    // Important: Payment approved but reservation is created with "pending" status
-    // Partner/Employee needs to confirm the reservation
-    
-    toast.success("Pagamento aprovado!", {
-      description: `${formatCurrency(totalPrice)} pagos com sucesso.`,
-    });
+  const getBookingData = () => {
+    return {
+      restaurantId,
+      userId: user?._id,
+      date: date ? format(date, "yyyy-MM-dd") : "",
+      time,
+      guests,
+      totalPrice,
+      customerInfo: {
+        ...customerInfo,
+        phone: phoneInput,
+      },
+      specialRequests: specialRequests || undefined,
+    };
+  };
 
-    // Reset form
+  const handleBookingCreate = (reservationId: string) => {
+    // Reset form after successful booking creation
     setDate(undefined);
     setTime("");
     setGuests(2);
     setSpecialRequests("");
-    setPaymentOpen(false);
-    
-    // Show reservation status information
-    setTimeout(() => {
-      toast.success("Solicitação de reserva enviada!", {
-        description: "Aguardando confirmação do restaurante. Você receberá um email quando a reserva for confirmada.",
+    setPhoneInput("");
+
+    if (onReservationSuccess) {
+      onReservationSuccess({
+        confirmationCode: reservationId,
       });
-    }, 2000);
+    }
+
+    toast.success("Reserva criada com sucesso!", {
+      description: "Aguardando confirmação do restaurante.",
+    });
   };
 
   const incrementGuests = () => {
@@ -173,7 +187,7 @@ export function RestaurantReservationForm({
     }
   };
 
-  if (userLoading) {
+  if (userLoading || assetLoading) {
     return (
       <div className={cn("rounded-xl overflow-hidden bg-blue-50 shadow-sm border border-gray-100", className)}>
         <div className="p-6">
@@ -203,209 +217,201 @@ export function RestaurantReservationForm({
   }
 
   const maxGuests = restaurant.maxTableSize || 8;
+  const isFormValid = date && time && customerInfo.name && customerInfo.email && phoneInput.trim();
 
   return (
-    <>
-      <div className={cn("rounded-xl overflow-hidden bg-blue-50 shadow-sm border border-gray-100", className)}>
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          <div>
-            <h3 className="text-xl font-bold text-gray-900">Faça sua reserva</h3>
-            <p className="text-sm text-gray-500 mt-1">Garanta seu lugar em {restaurant.name}</p>
-          </div>
+    <div className={cn("rounded-xl overflow-hidden bg-blue-50 shadow-sm border border-gray-100", className)}>
+      <div className="p-6 space-y-6">
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">Faça sua reserva</h3>
+          <p className="text-sm text-gray-500 mt-1">Garanta seu lugar em {restaurant.name}</p>
+        </div>
 
-          {/* User info display */}
-          <div className="bg-blue-50 p-4 rounded-md">
-            <h4 className="font-semibold text-gray-900 mb-2">Informações da reserva:</h4>
-            <div className="space-y-3 text-sm text-gray-700">
-              <div>
-                <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
-                <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
-              </div>
-              
-              {/* Campo editável para telefone */}
-              <div className="space-y-1">
-                <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
-                  Telefone para contato *
-                </Label>
-                <Input
-                  id="phone"
-                  type="tel"
-                  placeholder="(11) 99999-9999"
-                  value={phoneInput}
-                  onChange={(e) => setPhoneInput(e.target.value)}
-                  className="bg-white border-gray-300 text-sm"
-                  required
-                />
-              </div>
+        {/* User info display */}
+        <div className="bg-blue-50 p-4 rounded-md">
+          <h4 className="font-semibold text-gray-900 mb-2">Informações da reserva:</h4>
+          <div className="space-y-3 text-sm text-gray-700">
+            <div>
+              <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
+              <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
             </div>
             
-            {(!customerInfo.name || !customerInfo.email) && (
-              <p className="text-amber-600 text-xs mt-2">
-                ⚠️ Complete suas informações no perfil para fazer reservas
-              </p>
-            )}
+            {/* Campo editável para telefone */}
+            <div className="space-y-1">
+              <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
+                Telefone para contato *
+              </Label>
+              <Input
+                id="phone"
+                type="tel"
+                placeholder="(11) 99999-9999"
+                value={phoneInput}
+                onChange={(e) => setPhoneInput(e.target.value)}
+                className="bg-white border-gray-300 text-sm"
+                required
+              />
+            </div>
           </div>
           
-          {/* Data picker */}
-          <div>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full justify-between bg-white border-gray-200 hover:bg-gray-50 h-14 px-4"
-                >
-                  <div className="flex items-center">
-                    <CalendarIcon className="mr-3 h-5 w-5 text-blue-600" />
-                    <span className={cn(!date && "text-gray-400")}>
-                      {date ? format(date, "PPP", { locale: ptBR }) : "Data"}
-                    </span>
-                  </div>
-                  <span className="text-sm text-gray-400">
-                    {!date && "Selecionar"}
-                  </span>
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-auto p-0 border-none" side="bottom">
-                <Calendar
-                  mode="single"
-                  selected={date}
-                  onSelect={setDate}
-                  initialFocus
-                  disabled={(date) => {
-                    const today = new Date()
-                    today.setHours(0, 0, 0, 0)
-                    return date < today
-                  }}
-                  locale={ptBR}
-                  className="bg-white rounded-md border-none"
-                />
-              </PopoverContent>
-            </Popover>
-          </div>
-          
-          {/* Horário selector */}
-          <div>
-            <Select value={time} onValueChange={setTime} >
-              <SelectTrigger 
+          {(!customerInfo.name || !customerInfo.email) && (
+            <p className="text-amber-600 text-xs mt-2">
+              ⚠️ Complete suas informações no perfil para fazer reservas
+            </p>
+          )}
+        </div>
+        
+        {/* Data picker */}
+        <div>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
                 className="w-full justify-between bg-white border-gray-200 hover:bg-gray-50 h-14 px-4"
               >
                 <div className="flex items-center">
-                  <Clock className="mr-3 h-5 w-5 text-blue-600" />
-                  <span className={cn(!time && "text-gray-400")}>
-                    {time || "Horário"}
+                  <CalendarIcon className="mr-3 h-5 w-5 text-blue-600" />
+                  <span className={cn(!date && "text-gray-400")}>
+                    {date ? format(date, "PPP", { locale: ptBR }) : "Data"}
                   </span>
                 </div>
                 <span className="text-sm text-gray-400">
-                  {!time && "Selecionar"}
+                  {!date && "Selecionar"}
                 </span>
-              </SelectTrigger>
-              <SelectContent className="bg-white border-none">
-                {availableTimes.map((timeOption) => (
-                  <SelectItem 
-                    key={timeOption} 
-                    value={timeOption}
-                    className="text-gray-900 hover:bg-blue-100 font-semibold hover:text-gray-900"
-                  >
-                    {timeOption}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          
-          {/* Pessoas selector */}
-          <div>
-            <div className="flex items-center justify-between border border-gray-200 rounded-md h-14 px-4 bg-white hover:bg-gray-50">
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-auto p-0 border-none" side="bottom">
+              <Calendar
+                mode="single"
+                selected={date}
+                onSelect={setDate}
+                initialFocus
+                disabled={(date) => {
+                  const today = new Date()
+                  today.setHours(0, 0, 0, 0)
+                  return date < today
+                }}
+                locale={ptBR}
+                className="bg-white rounded-md border-none"
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
+        
+        {/* Horário selector */}
+        <div>
+          <Select value={time} onValueChange={setTime}>
+            <SelectTrigger 
+              className="w-full justify-between bg-white border-gray-200 hover:bg-gray-50 h-14 px-4"
+            >
               <div className="flex items-center">
-                <Users className="mr-3 h-5 w-5 text-blue-600" />
-                <span className="text-gray-900">Pessoas</span>
+                <Clock className="mr-3 h-5 w-5 text-blue-600" />
+                <span className={cn(!time && "text-gray-400")}>
+                  {time || "Horário"}
+                </span>
               </div>
-              <div className="flex items-center space-x-3">
-                <Button
-                  type="button"
-                  variant="outline" 
-                  size="icon" 
-                  className="h-8 w-8 rounded-full border-gray-200"
-                  onClick={decrementGuests}
-                  disabled={guests <= 1}
+              <span className="text-sm text-gray-400">
+                {!time && "Selecionar"}
+              </span>
+            </SelectTrigger>
+            <SelectContent className="bg-white border-none">
+              {availableTimes.map((timeOption) => (
+                <SelectItem 
+                  key={timeOption} 
+                  value={timeOption}
+                  className="text-gray-900 hover:bg-blue-100 font-semibold hover:text-gray-900"
                 >
-                  <Minus className="h-4 w-4" />
-                  <span className="sr-only">Diminuir</span>
-                </Button>
-                <span className="w-5 text-center font-medium">{guests}</span>
-                <Button
-                  type="button"
-                  variant="outline" 
-                  size="icon" 
-                  className="h-8 w-8 rounded-full border-gray-200"
-                  onClick={incrementGuests}
-                  disabled={guests >= maxGuests}
-                >
-                  <Plus className="h-4 w-4" />
-                  <span className="sr-only">Aumentar</span>
-                </Button>
-              </div>
+                  {timeOption}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        
+        {/* Pessoas selector */}
+        <div>
+          <div className="flex items-center justify-between border border-gray-200 rounded-md h-14 px-4 bg-white hover:bg-gray-50">
+            <div className="flex items-center">
+              <Users className="mr-3 h-5 w-5 text-blue-600" />
+              <span className="text-gray-900">Pessoas</span>
+            </div>
+            <div className="flex items-center space-x-3">
+              <Button
+                type="button"
+                variant="outline" 
+                size="icon" 
+                className="h-8 w-8 rounded-full border-gray-200"
+                onClick={decrementGuests}
+                disabled={guests <= 1}
+              >
+                <Minus className="h-4 w-4" />
+                <span className="sr-only">Diminuir</span>
+              </Button>
+              <span className="w-5 text-center font-medium">{guests}</span>
+              <Button
+                type="button"
+                variant="outline" 
+                size="icon" 
+                className="h-8 w-8 rounded-full border-gray-200"
+                onClick={incrementGuests}
+                disabled={guests >= maxGuests}
+              >
+                <Plus className="h-4 w-4" />
+                <span className="sr-only">Aumentar</span>
+              </Button>
             </div>
           </div>
+        </div>
 
-          {/* Special Requests */}
-          <div className="space-y-2">
-            <Label htmlFor="requests">Solicitações especiais (opcional)</Label>
-            <Textarea
-              id="requests"
-              value={specialRequests}
-              onChange={(e) => setSpecialRequests(e.target.value)}
-              className="bg-white border-gray-200"
-              placeholder="Aniversário, alergia alimentar, preferência de mesa..."
-            />
-          </div>
-
-          {/* Price Summary */}
-          <div className="bg-gray-50 p-4 rounded-md space-y-2">
-            <div className="flex justify-between text-sm">
-              <span>Taxa de reserva</span>
-              <span>{formatCurrency(totalPrice)}</span>
-            </div>
-            <div className="flex justify-between font-semibold text-lg">
-              <span>Total</span>
-              <span>{formatCurrency(totalPrice)}</span>
-            </div>
-            <p className="text-xs text-gray-500">
-              *Taxa será deduzida da conta final
-            </p>
-          </div>
-
-          <Button 
-            type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white h-12 font-medium"
-            disabled={!date || !time || !customerInfo.name || !customerInfo.email || !phoneInput.trim()}
-          >
-            Confirmar reserva
-          </Button>
-        </form>
-      </div>
-
-      {/* Payment dialog */}
-      <Dialog open={paymentOpen} onOpenChange={setPaymentOpen}>
-        <DialogContent className="w-full max-w-md">
-          <DialogTitle>Pagamento da Reserva</DialogTitle>
-          <DialogDescription>Complete o pagamento para confirmar sua reserva.</DialogDescription>
-          <PaymentWrapper 
-            amountCents={totalPrice * 100}
-            bookingType="restaurant"
-            bookingData={{
-              restaurantId,
-              date: date ? format(date, "yyyy-MM-dd") : "",
-              time,
-              guests,
-              customerInfo,
-              specialRequests: specialRequests || undefined,
-            }}
-            onSuccess={handlePaymentSuccess}
+        {/* Special Requests */}
+        <div className="space-y-2">
+          <Label htmlFor="requests">Solicitações especiais (opcional)</Label>
+          <Textarea
+            id="requests"
+            value={specialRequests}
+            onChange={(e) => setSpecialRequests(e.target.value)}
+            className="bg-white border-gray-200"
+            placeholder="Aniversário, alergia alimentar, preferência de mesa..."
           />
-        </DialogContent>
-      </Dialog>
-    </>
-  )
+        </div>
+
+        {/* Price Summary */}
+        <div className="bg-gray-50 p-4 rounded-md space-y-2">
+          <div className="flex justify-between text-sm">
+            <span>Taxa de reserva</span>
+            <span>{formatCurrency(totalPrice)}</span>
+          </div>
+          <div className="flex justify-between font-semibold text-lg">
+            <span>Total</span>
+            <span>{formatCurrency(totalPrice)}</span>
+          </div>
+          <p className="text-xs text-gray-500">
+            *Taxa será deduzida da conta final
+          </p>
+        </div>
+
+        {/* Payment Link Button */}
+        {isFormValid && hasPaymentLink ? (
+          <PaymentLinkBookingButton
+            assetType="restaurant"
+            assetId={restaurantId}
+            assetName={restaurant.name}
+            price={totalPrice}
+            stripePaymentLinkUrl={paymentLinkUrl}
+            bookingData={getBookingData()}
+            onBookingCreate={handleBookingCreate}
+            disabled={!isFormValid}
+          />
+        ) : (
+          <Button 
+            type="button"
+            className="w-full bg-gray-400 text-white h-12 font-medium cursor-not-allowed"
+            disabled
+          >
+            {!isFormValid ? "Preencha todos os campos obrigatórios" : "Sistema de pagamento não disponível"}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }

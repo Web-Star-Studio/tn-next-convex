@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Id } from "../../_generated/dataModel";
 import { mutationWithRole } from "../../domains/rbac";
 import { getCurrentUserRole, getCurrentUserConvexId, verifyPartnerAccess } from "../../domains/rbac";
+import { internal } from "../../_generated/api";
 import type { 
   EventCreateInput,
   EventUpdateInput,
@@ -78,6 +79,24 @@ export const create = mutationWithRole(["partner", "master"])({
     } catch (error) {
       console.error("Failed to log event creation:", error);
       // Don't fail the main operation if logging fails
+    }
+    
+    // Automatically create Stripe Product and Payment Link
+    try {
+      const priceInCents = Math.round(args.price * 100); // Convert to cents
+      
+      await ctx.scheduler.runAfter(0, internal.domains.payments.actions.createStripeProductAndPaymentLink, {
+        assetType: "event",
+        assetId: eventId,
+        assetTitle: args.title,
+        assetDescription: args.shortDescription,
+        price: priceInCents,
+        currency: "brl",
+        imageUrl: args.imageUrl,
+      });
+    } catch (error) {
+      console.error("Failed to create Stripe product/payment link for event:", error);
+      // Don't fail the event creation if Stripe fails
     }
     
     return eventId;

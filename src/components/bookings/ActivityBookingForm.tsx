@@ -27,16 +27,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { cardStyles, buttonStyles, formStyles } from "@/lib/ui-config";
-import PaymentWrapper from "@/components/payments/PaymentWrapper";
+import { PaymentLinkBookingButton } from "@/components/payments/PaymentLinkBookingButton";
+import { useAssetPaymentLink } from "@/hooks/useAssetPaymentLink";
 
 interface ActivityBookingFormProps {
   activityId: Id<"activities">;
@@ -75,10 +71,18 @@ export function ActivityBookingForm({
   });
   const [phoneInput, setPhoneInput] = useState("");
   const [specialRequests, setSpecialRequests] = useState("");
-  const [paymentOpen, setPaymentOpen] = useState(false);
 
   // Get current user information
   const { user, isLoading: userLoading } = useCurrentUser();
+
+  // Get asset payment link info
+  const { 
+    asset, 
+    isLoading: assetLoading, 
+    hasPaymentLink, 
+    paymentLinkUrl,
+    isAssetActive 
+  } = useAssetPaymentLink("activity", activityId);
 
   // Get activity tickets if available
   const tickets = useQuery(api.domains.activities.queries.getActivityTickets, {
@@ -117,58 +121,74 @@ export function ActivityBookingForm({
 
   const totalPrice = getPrice();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const validateForm = () => {
     if (!date) {
       toast.error("Selecione uma data");
-      return;
+      return false;
     }
 
     if (!user) {
       toast.error("Você precisa estar logado para fazer uma reserva");
-      return;
+      return false;
     }
 
     if (!customerInfo.name || !customerInfo.email) {
       toast.error("Informações do usuário incompletas. Verifique seu perfil.");
-      return;
+      return false;
     }
 
     if (!phoneInput.trim()) {
       toast.error("Por favor, preencha seu telefone para continuar");
-      return;
+      return false;
     }
 
-    // Open payment dialog instead of creating booking directly
-    setPaymentOpen(true);
+    if (!hasPaymentLink) {
+      toast.error("Sistema de pagamento não configurado para esta atividade");
+      return false;
+    }
+
+    return true;
   };
 
-  const handlePaymentSuccess = async (paymentIntentId: string) => {
-    // Important: Payment approved but booking is created with "pending" status
-    // Partner/Employee needs to confirm the booking
-    
-    toast.success("Pagamento aprovado!", {
-      description: `${formatCurrency(totalPrice)} pagos com sucesso.`,
-    });
+  const getBookingData = () => {
+    return {
+      activityId,
+      userId: user?._id,
+      ticketId: selectedTicketId,
+      date: date ? format(date, "yyyy-MM-dd") : "",
+      time: time || undefined,
+      participants,
+      totalPrice,
+      customerInfo: {
+        ...customerInfo,
+        phone: phoneInput,
+      },
+      specialRequests: specialRequests || undefined,
+    };
+  };
 
-    // Reset form
+  const handleBookingCreate = (reservationId: string) => {
+    // Reset form after successful booking creation
     setDate(undefined);
     setTime("");
     setParticipants(activity.minParticipants);
     setSelectedTicketId(undefined);
     setSpecialRequests("");
-    setPaymentOpen(false);
-    
-    // Show booking status information
-    setTimeout(() => {
-      toast.success("Solicitação de atividade enviada!", {
-        description: "Aguardando confirmação do organizador. Você receberá um email quando a reserva for confirmada.",
+    setPhoneInput("");
+
+    if (onBookingSuccess) {
+      onBookingSuccess({
+        confirmationCode: reservationId,
+        totalPrice,
       });
-    }, 2000);
+    }
+
+    toast.success("Reserva criada com sucesso!", {
+      description: "Aguardando confirmação do organizador.",
+    });
   };
 
-  if (userLoading) {
+  if (userLoading || assetLoading) {
     return (
       <div className={cn(cardStyles.base, className)}>
         <div className={cardStyles.content.default}>
@@ -197,212 +217,203 @@ export function ActivityBookingForm({
     );
   }
 
-  return (
-    <>
-      <div className={cn(cardStyles.base, cardStyles.hover.default, className)}>
-        <form onSubmit={handleSubmit} className={cardStyles.content.default}>
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Reserve sua atividade</h3>
-              <p className="text-sm text-gray-500 mt-1">{activity.title}</p>
-            </div>
+  const isFormValid = date && customerInfo.name && customerInfo.email && phoneInput.trim();
 
-            {/* User info display */}
-            <div className="bg-blue-50 p-4 rounded-md">
-              <h4 className="font-semibold text-gray-900 mb-2">Informações da reserva:</h4>
-              <div className="space-y-3 text-sm text-gray-700">
-                <div>
-                  <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
-                  <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
-                </div>
-                
-                <div className="space-y-1">
-                  <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
-                    Telefone para contato *
-                  </Label>
-                  <Input
-                    id="phone"
-                    type="tel"
-                    placeholder="(11) 99999-9999"
-                    value={phoneInput}
-                    onChange={(e) => setPhoneInput(e.target.value)}
-                    className="bg-white border-gray-300 text-sm"
-                    required
-                  />
-                </div>
+  return (
+    <div className={cn(cardStyles.base, cardStyles.hover.default, className)}>
+      <div className={cardStyles.content.default}>
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-xl font-bold text-gray-900">Reserve sua atividade</h3>
+            <p className="text-sm text-gray-500 mt-1">{activity.title}</p>
+          </div>
+
+          {/* User info display */}
+          <div className="bg-blue-50 p-4 rounded-md">
+            <h4 className="font-semibold text-gray-900 mb-2">Informações da reserva:</h4>
+            <div className="space-y-3 text-sm text-gray-700">
+              <div>
+                <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
+                <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
               </div>
               
-              {(!customerInfo.name || !customerInfo.email) && (
-                <p className="text-amber-600 text-xs mt-2">
-                  ⚠️ Complete suas informações no perfil para fazer reservas
-                </p>
-              )}
+              <div className="space-y-1">
+                <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
+                  Telefone para contato *
+                </Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="(11) 99999-9999"
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  className="bg-white border-gray-300 text-sm"
+                  required
+                />
+              </div>
             </div>
+            
+            {(!customerInfo.name || !customerInfo.email) && (
+              <p className="text-amber-600 text-xs mt-2">
+                ⚠️ Complete suas informações no perfil para fazer reservas
+              </p>
+            )}
+          </div>
 
-            {/* Date selection */}
-            <div className="space-y-2">
-              <Label>Data da atividade</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !date && "text-muted-foreground"
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {date ? format(date, "PPP", { locale: ptBR }) : "Selecione uma data"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={date}
-                    onSelect={setDate}
-                    disabled={(date) => date < new Date()}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
+          {/* Date selection */}
+          <div className="space-y-2">
+            <Label>Data da atividade</Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className={cn(
+                    "w-full justify-start text-left font-normal",
+                    !date && "text-muted-foreground"
+                  )}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {date ? format(date, "PPP", { locale: ptBR }) : "Selecione uma data"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="single"
+                  selected={date}
+                  onSelect={setDate}
+                  disabled={(date) => date < new Date()}
+                  initialFocus
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
 
+          <div className="space-y-2">
+            <Label>Horário (opcional)</Label>
+            <Select value={time} onValueChange={setTime}>
+              <SelectTrigger className={formStyles.select.base}>
+                <SelectValue placeholder="Selecione um horário" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableTimes.map((timeOption) => (
+                  <SelectItem key={timeOption} value={timeOption}>
+                    {timeOption}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Ticket Selection (if multiple tickets) */}
+          {activity.hasMultipleTickets && tickets && tickets.length > 0 && (
             <div className="space-y-2">
-              <Label>Horário (opcional)</Label>
-              <Select value={time} onValueChange={setTime}>
+              <Label>Tipo de ingresso</Label>
+              <Select
+                value={selectedTicketId || ""}
+                onValueChange={(value) => setSelectedTicketId(value as Id<"activityTickets">)}
+              >
                 <SelectTrigger className={formStyles.select.base}>
-                  <SelectValue placeholder="Selecione um horário" />
+                  <SelectValue placeholder="Selecione o tipo de ingresso" />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableTimes.map((timeOption) => (
-                    <SelectItem key={timeOption} value={timeOption}>
-                      {timeOption}
+                  {tickets.map((ticket) => (
+                    <SelectItem key={ticket._id} value={ticket._id}>
+                      <div className="flex items-center justify-between w-full">
+                        <span>{ticket.name}</span>
+                        <span className="text-sm text-gray-500 ml-2">
+                          R$ {ticket.price.toFixed(2)}
+                        </span>
+                      </div>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+          )}
 
-            {/* Ticket Selection (if multiple tickets) */}
-            {activity.hasMultipleTickets && tickets && tickets.length > 0 && (
-              <div className="space-y-2">
-                <Label>Tipo de ingresso</Label>
-                <Select
-                  value={selectedTicketId || ""}
-                  onValueChange={(value) => setSelectedTicketId(value as Id<"activityTickets">)}
-                >
-                  <SelectTrigger className={formStyles.select.base}>
-                    <SelectValue placeholder="Selecione o tipo de ingresso" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {tickets.map((ticket) => (
-                      <SelectItem key={ticket._id} value={ticket._id}>
-                        <div className="flex items-center justify-between w-full">
-                          <span>{ticket.name}</span>
-                          <span className="text-sm text-gray-500 ml-2">
-                            R$ {ticket.price.toFixed(2)}
-                          </span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          {/* Participants */}
+          <div className="space-y-2">
+            <Label htmlFor="participants">Número de participantes</Label>
+            <div className="flex items-center space-x-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setParticipants(Math.max(activity.minParticipants, participants - 1))}
+                disabled={participants <= activity.minParticipants}
+              >
+                -
+              </Button>
+              <div className="flex items-center justify-center w-12 h-10 border rounded-md">
+                <span className="text-sm font-medium">{participants}</span>
               </div>
-            )}
-
-            {/* Participants */}
-            <div className="space-y-2">
-              <Label htmlFor="participants">Número de participantes</Label>
-              <div className="flex items-center space-x-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setParticipants(Math.max(activity.minParticipants, participants - 1))}
-                  disabled={participants <= activity.minParticipants}
-                >
-                  -
-                </Button>
-                <div className="flex items-center justify-center w-12 h-10 border rounded-md">
-                  <span className="text-sm font-medium">{participants}</span>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setParticipants(Math.min(activity.maxParticipants, participants + 1))}
-                  disabled={participants >= activity.maxParticipants}
-                >
-                  +
-                </Button>
-              </div>
-              <p className="text-xs text-gray-500">
-                Mín: {activity.minParticipants} | Máx: {activity.maxParticipants}
-              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setParticipants(Math.min(activity.maxParticipants, participants + 1))}
+                disabled={participants >= activity.maxParticipants}
+              >
+                +
+              </Button>
             </div>
-
-            {/* Special Requests */}
-            <div className="space-y-2">
-              <Label htmlFor="requests">Solicitações especiais (opcional)</Label>
-              <Textarea
-                id="requests"
-                value={specialRequests}
-                onChange={(e) => setSpecialRequests(e.target.value)}
-                className={formStyles.textarea.base}
-                placeholder="Alguma necessidade especial ou preferência..."
-              />
-            </div>
-
-            {/* Price Summary */}
-            <div className="bg-gray-50 p-4 rounded-md space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>
-                  {participants} {participants === 1 ? "participante" : "participantes"}
-                </span>
-                <span>{formatCurrency(totalPrice)}</span>
-              </div>
-              <div className="flex justify-between font-semibold text-lg">
-                <span>Total</span>
-                <span>{formatCurrency(totalPrice)}</span>
-              </div>
-            </div>
-
-            {/* Submit Button */}
-            <Button
-              type="submit"
-              className={cn(buttonStyles.variant.default, "w-full")}
-              disabled={!date || !customerInfo.name || !customerInfo.email || !phoneInput.trim()}
-            >
-              Reservar atividade
-            </Button>
+            <p className="text-xs text-gray-500">
+              Mín: {activity.minParticipants} | Máx: {activity.maxParticipants}
+            </p>
           </div>
-        </form>
-      </div>
 
-      {/* Payment dialog */}
-      <Dialog open={paymentOpen} onOpenChange={setPaymentOpen}>
-        <DialogContent className="w-full max-w-md">
-          <DialogTitle>Pagamento da Atividade</DialogTitle>
-          <DialogDescription>Complete o pagamento para confirmar sua reserva.</DialogDescription>
-          <PaymentWrapper 
-            amountCents={totalPrice * 100}
-            bookingType="activity"
-            bookingData={{
-              activityId,
-              ticketId: selectedTicketId,
-              date: date ? format(date, "yyyy-MM-dd") : "",
-              time: time || undefined,
-              participants,
-              customerInfo: {
-                ...customerInfo,
-                phone: phoneInput,
-              },
-              specialRequests: specialRequests || undefined,
-            }}
-            onSuccess={handlePaymentSuccess}
-          />
-        </DialogContent>
-      </Dialog>
-    </>
+          {/* Special Requests */}
+          <div className="space-y-2">
+            <Label htmlFor="requests">Solicitações especiais (opcional)</Label>
+            <Textarea
+              id="requests"
+              value={specialRequests}
+              onChange={(e) => setSpecialRequests(e.target.value)}
+              className={formStyles.textarea.base}
+              placeholder="Alguma necessidade especial ou preferência..."
+            />
+          </div>
+
+          {/* Price Summary */}
+          <div className="bg-gray-50 p-4 rounded-md space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>
+                {participants} {participants === 1 ? "participante" : "participantes"}
+              </span>
+              <span>{formatCurrency(totalPrice)}</span>
+            </div>
+            <div className="flex justify-between font-semibold text-lg">
+              <span>Total</span>
+              <span>{formatCurrency(totalPrice)}</span>
+            </div>
+          </div>
+
+          {/* Payment Link Button */}
+          {isFormValid && hasPaymentLink ? (
+            <PaymentLinkBookingButton
+              assetType="activity"
+              assetId={activityId}
+              assetName={activity.title}
+              price={totalPrice}
+              stripePaymentLinkUrl={paymentLinkUrl}
+              bookingData={getBookingData()}
+              onBookingCreate={handleBookingCreate}
+              disabled={!isFormValid}
+              className="w-full"
+            >
+              Reservar atividade por {formatCurrency(totalPrice)}
+            </PaymentLinkBookingButton>
+          ) : (
+            <Button 
+              type="button"
+              className="w-full bg-gray-400 text-white h-12 font-medium cursor-not-allowed"
+              disabled
+            >
+              {!isFormValid ? "Preencha todos os campos obrigatórios" : "Sistema de pagamento não disponível"}
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

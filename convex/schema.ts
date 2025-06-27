@@ -263,6 +263,10 @@ export default defineSchema({
     isActive: v.boolean(),
     hasMultipleTickets: v.optional(v.boolean()),
     partnerId: v.id("users"),
+    // Stripe Integration Fields
+    stripeProductId: v.optional(v.string()),          // Stripe Product ID
+    stripePaymentLinkId: v.optional(v.string()),       // Stripe Payment Link ID
+    stripePaymentLinkUrl: v.optional(v.string()),      // Stripe Payment Link URL
   })
     .index("by_partner", ["partnerId"])
     .index("featured_activities", ["isFeatured", "isActive"])
@@ -319,6 +323,10 @@ export default defineSchema({
       primary: v.optional(v.string()),
       secondary: v.optional(v.string()),
     })),
+    // Stripe Integration Fields
+    stripeProductId: v.optional(v.string()),          // Stripe Product ID
+    stripePaymentLinkId: v.optional(v.string()),       // Stripe Payment Link ID
+    stripePaymentLinkUrl: v.optional(v.string()),      // Stripe Payment Link URL
   })
     .index("by_partner", ["partnerId"])
     .index("by_date", ["date"])
@@ -393,6 +401,10 @@ export default defineSchema({
     isActive: v.boolean(),                              // Status ativo/inativo
     isFeatured: v.boolean(),                            // Status destacado
     partnerId: v.id("users"),                           // ID do parceiro/proprietário
+    // Stripe Integration Fields
+    stripeProductId: v.optional(v.string()),          // Stripe Product ID
+    stripePaymentLinkId: v.optional(v.string()),       // Stripe Payment Link ID
+    stripePaymentLinkUrl: v.optional(v.string()),      // Stripe Payment Link URL
   })
     .index("by_slug", ["slug"])                         // Índice por slug (URL)
     .index("by_partner", ["partnerId"])                 // Índice por parceiro
@@ -413,11 +425,18 @@ export default defineSchema({
     status: v.string(),                                 // Status (ex: "pending", "confirmed", "canceled")
     confirmationCode: v.string(),                       // Código de confirmação
     tableId: v.optional(v.id("restaurantTables")),      // Mesa atribuída (opcional)
+    // Payment fields for paid reservations (e.g., tasting menu, entrance fee)
+    totalPrice: v.optional(v.number()),                 // Preço total (opcional para reservas pagas)
+    paymentStatus: v.optional(v.string()),              // Status do pagamento (pending, paid, refunded, failed)
+    paymentMethod: v.optional(v.string()),              // Método de pagamento (credit_card, pix, bank_transfer)
     paymentIntentId: v.optional(v.string()),        // Stripe PaymentIntent ID
     paymentCaptured: v.optional(v.boolean()),        // Se o pagamento foi capturado
     refundId: v.optional(v.string()),                // Stripe Refund ID se aplicável
     refundStatus: v.optional(v.string()),            // Status do refund: pending, succeeded, failed
     cancellationReason: v.optional(v.string()),      // Motivo do cancelamento
+    // Timestamps
+    createdAt: v.optional(v.number()),                  // Timestamp de criação
+    updatedAt: v.optional(v.number()),                  // Timestamp de atualização
   })
     .index("by_restaurant", ["restaurantId"])
     .index("by_user", ["userId"])
@@ -635,6 +654,10 @@ export default defineSchema({
     updatedAt: v.number(),
     ownerId: v.optional(v.id("users")), // Reference to user who created/owns this vehicle
     organizationId: v.optional(v.string()), // For multi-tenant applications
+    // Stripe Integration Fields
+    stripeProductId: v.optional(v.string()),          // Stripe Product ID
+    stripePaymentLinkId: v.optional(v.string()),       // Stripe Payment Link ID
+    stripePaymentLinkUrl: v.optional(v.string()),      // Stripe Payment Link URL
   })
     .index("by_status", ["status"])
     .index("by_ownerId", ["ownerId"]),
@@ -729,6 +752,10 @@ export default defineSchema({
     isFeatured: v.boolean(),                            // Status destacado
     tags: v.array(v.string()),                          // Tags para busca
     partnerId: v.id("users"),                           // ID do parceiro/proprietário
+    // Stripe Integration Fields
+    stripeProductId: v.optional(v.string()),          // Stripe Product ID
+    stripePaymentLinkId: v.optional(v.string()),       // Stripe Payment Link ID
+    stripePaymentLinkUrl: v.optional(v.string()),      // Stripe Payment Link URL
   })
     .index("by_slug", ["slug"])                         // Índice por slug (URL)
     .index("by_partner", ["partnerId"])                 // Índice por parceiro

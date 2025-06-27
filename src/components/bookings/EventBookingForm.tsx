@@ -20,16 +20,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { cardStyles, buttonStyles, formStyles, badgeStyles } from "@/lib/ui-config";
-import PaymentWrapper from "@/components/payments/PaymentWrapper";
+import { PaymentLinkBookingButton } from "@/components/payments/PaymentLinkBookingButton";
+import { useAssetPaymentLink } from "@/hooks/useAssetPaymentLink";
 
 interface EventBookingFormProps {
   eventId: Id<"events">;
@@ -67,10 +62,18 @@ export function EventBookingForm({
   });
   const [phoneInput, setPhoneInput] = useState("");
   const [specialRequests, setSpecialRequests] = useState("");
-  const [paymentOpen, setPaymentOpen] = useState(false);
 
   // Get current user information
   const { user, isLoading: userLoading } = useCurrentUser();
+
+  // Get asset payment link info
+  const { 
+    asset, 
+    isLoading: assetLoading, 
+    hasPaymentLink, 
+    paymentLinkUrl,
+    isAssetActive 
+  } = useAssetPaymentLink("event", eventId);
 
   // Get event tickets if available
   const tickets = useQuery(api.domains.events.queries.getEventTickets, {
@@ -100,53 +103,75 @@ export function EventBookingForm({
 
   const totalPrice = getPrice();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const validateForm = () => {
     if (!user) {
       toast.error("Você precisa estar logado para fazer uma reserva");
-      return;
+      return false;
     }
 
     if (!customerInfo.name || !customerInfo.email) {
       toast.error("Informações do usuário incompletas. Verifique seu perfil.");
-      return;
+      return false;
     }
 
     if (!phoneInput.trim()) {
       toast.error("Por favor, preencha seu telefone para continuar");
-      return;
+      return false;
     }
 
-    // Open payment dialog
-    setPaymentOpen(true);
+    if (!hasPaymentLink) {
+      toast.error("Sistema de pagamento não configurado para este evento");
+      return false;
+    }
+
+    if (isEventPast) {
+      toast.error("Este evento já aconteceu");
+      return false;
+    }
+
+    return true;
   };
 
-  const handlePaymentSuccess = async (paymentIntentId: string) => {
-    toast.success("Pagamento aprovado!", {
-      description: `${formatCurrency(totalPrice)} pagos com sucesso.`,
-    });
+  const getBookingData = () => {
+    return {
+      eventId,
+      userId: user?._id,
+      ticketId: selectedTicketId,
+      quantity,
+      totalPrice,
+      customerInfo: {
+        ...customerInfo,
+        phone: phoneInput,
+      },
+      specialRequests: specialRequests || undefined,
+    };
+  };
 
-    // Reset form
+  const handleBookingCreate = (reservationId: string) => {
+    // Reset form after successful booking creation
     setQuantity(1);
     setSelectedTicketId(undefined);
     setSpecialRequests("");
     setPhoneInput("");
-    setPaymentOpen(false);
-    
-    // Show booking status information
-    setTimeout(() => {
-      toast.success("Ingresso(s) adquirido(s)!", {
-        description: "Aguardando confirmação. Você receberá os ingressos por email.",
+
+    if (onBookingSuccess) {
+      onBookingSuccess({
+        confirmationCode: reservationId,
+        totalPrice,
       });
-    }, 2000);
+    }
+
+    toast.success("Ingresso(s) reservado(s) com sucesso!", {
+      description: "Aguardando confirmação do organizador.",
+    });
   };
 
   // Parse event date for display
   const eventDate = new Date(event.date);
   const isEventPast = eventDate < new Date();
+  const isFormValid = customerInfo.name && customerInfo.email && phoneInput.trim() && !isEventPast;
 
-  if (userLoading) {
+  if (userLoading || assetLoading) {
     return (
       <div className={cn(cardStyles.base, className)}>
         <div className={cardStyles.content.default}>
@@ -178,7 +203,7 @@ export function EventBookingForm({
   return (
     <>
       <div className={cn(cardStyles.base, cardStyles.hover.default, className)}>
-        <form onSubmit={handleSubmit} className={cardStyles.content.default}>
+        <div className={cardStyles.content.default}>
           <div className="space-y-4">
             <div>
               <h3 className="text-xl font-bold text-gray-900">Reserve seu ingresso</h3>
@@ -322,21 +347,38 @@ export function EventBookingForm({
               </div>
             </div>
 
-            {/* Submit Button */}
-            <Button
-              type="submit"
-              className={cn(buttonStyles.variant.default, "w-full")}
-              disabled={isEventPast || !customerInfo.name || !customerInfo.email || !phoneInput.trim()}
-            >
-              {isEventPast ? (
-                "Evento já realizado"
-              ) : (
-                <>
-                  <Ticket className="mr-2 h-4 w-4" />
-                  Comprar {quantity === 1 ? "ingresso" : "ingressos"}
-                </>
-              )}
-            </Button>
+            {/* Payment Link Button */}
+            {isEventPast ? (
+              <Button
+                disabled
+                className="w-full bg-gray-400 text-white h-12 font-medium cursor-not-allowed"
+              >
+                Evento já realizado
+              </Button>
+            ) : isFormValid && hasPaymentLink ? (
+              <PaymentLinkBookingButton
+                assetType="event"
+                assetId={eventId}
+                assetName={event.title}
+                price={totalPrice}
+                stripePaymentLinkUrl={paymentLinkUrl}
+                bookingData={getBookingData()}
+                onBookingCreate={handleBookingCreate}
+                disabled={!isFormValid}
+                className="w-full"
+              >
+                <Ticket className="mr-2 h-4 w-4" />
+                Comprar {quantity === 1 ? "ingresso" : "ingressos"} por {formatCurrency(totalPrice)}
+              </PaymentLinkBookingButton>
+            ) : (
+              <Button 
+                type="button"
+                className="w-full bg-gray-400 text-white h-12 font-medium cursor-not-allowed"
+                disabled
+              >
+                {!isFormValid ? "Preencha todos os campos obrigatórios" : "Sistema de pagamento não disponível"}
+              </Button>
+            )}
 
             {isEventPast && (
               <p className="text-xs text-center text-gray-500">
@@ -344,31 +386,8 @@ export function EventBookingForm({
               </p>
             )}
           </div>
-        </form>
+        </div>
       </div>
-
-      {/* Payment dialog */}
-      <Dialog open={paymentOpen} onOpenChange={setPaymentOpen}>
-        <DialogContent className="w-full max-w-md">
-          <DialogTitle>Pagamento do Ingresso</DialogTitle>
-          <DialogDescription>Complete o pagamento para confirmar sua compra.</DialogDescription>
-          <PaymentWrapper 
-            amountCents={totalPrice * 100}
-            bookingType="event"
-            bookingData={{
-              eventId,
-              ticketId: selectedTicketId,
-              quantity,
-              customerInfo: {
-                ...customerInfo,
-                phone: phoneInput,
-              },
-              specialRequests: specialRequests || undefined,
-            }}
-            onSuccess={handlePaymentSuccess}
-          />
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

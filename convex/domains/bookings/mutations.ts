@@ -2442,3 +2442,270 @@ async function updateBookingByType(ctx: MutationCtx, bookingId: string, bookingT
       break;
   }
 }
+
+// ============================================================
+// PAYMENT LINK BOOKING MUTATIONS
+// ============================================================
+
+/**
+ * Create activity booking from payment link
+ * Called after successful payment via Stripe Payment Link
+ */
+export const createActivityBookingFromPaymentLink = mutation({
+  args: v.object({
+    activityId: v.string(),
+    sessionId: v.string(),
+    status: v.string(),
+    paymentStatus: v.string(),
+    paymentMethod: v.string(),
+    totalPrice: v.number(),
+    customerInfo: v.object({
+      name: v.string(),
+      email: v.string(),
+      phone: v.string(),
+    }),
+    confirmationCode: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }),
+  returns: v.object({
+    bookingId: v.id("activityBookings"),
+    confirmationCode: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const activity = await ctx.db.get(args.activityId as Id<"activities">);
+    if (!activity) {
+      throw new Error("Atividade não encontrada");
+    }
+
+    // Create a generic user for payment link reservations if needed
+    const existingUser = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", args.customerInfo.email))
+      .first();
+
+    let userId: Id<"users">;
+    if (existingUser) {
+      userId = existingUser._id;
+    } else {
+      // Create a temporary user account for the reservation
+      userId = await ctx.db.insert("users", {
+        name: args.customerInfo.name,
+        email: args.customerInfo.email,
+        phone: args.customerInfo.phone,
+        role: "traveler",
+        isActive: true,
+        onboardingCompleted: false,
+      });
+    }
+
+    // Create the booking
+    const bookingId = await ctx.db.insert("activityBookings", {
+      activityId: args.activityId as Id<"activities">,
+      userId,
+      date: new Date().toISOString().split('T')[0], // Today as default, should be customizable
+      participants: 1, // Default to 1, should be customizable
+      totalPrice: args.totalPrice,
+      status: args.status,
+      paymentStatus: args.paymentStatus,
+      paymentMethod: args.paymentMethod,
+      confirmationCode: args.confirmationCode,
+      customerInfo: args.customerInfo,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+      // Store session ID for reference
+      paymentIntentId: args.sessionId,
+      paymentCaptured: true,
+    });
+
+    // Send confirmation emails
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
+      customerEmail: args.customerInfo.email,
+      customerName: args.customerInfo.name,
+      assetName: activity.title,
+      bookingType: "activity",
+      confirmationCode: args.confirmationCode,
+      bookingDate: new Date().toISOString().split('T')[0],
+      totalPrice: args.totalPrice,
+    });
+
+    return {
+      bookingId,
+      confirmationCode: args.confirmationCode,
+    };
+  },
+});
+
+/**
+ * Create event booking from payment link
+ */
+export const createEventBookingFromPaymentLink = mutation({
+  args: v.object({
+    eventId: v.string(),
+    sessionId: v.string(),
+    status: v.string(),
+    paymentStatus: v.string(),
+    paymentMethod: v.string(),
+    totalPrice: v.number(),
+    customerInfo: v.object({
+      name: v.string(),
+      email: v.string(),
+      phone: v.string(),
+    }),
+    confirmationCode: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }),
+  returns: v.object({
+    bookingId: v.id("eventBookings"),
+    confirmationCode: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const event = await ctx.db.get(args.eventId as Id<"events">);
+    if (!event) {
+      throw new Error("Evento não encontrado");
+    }
+
+    // Find or create user
+    const existingUser = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", args.customerInfo.email))
+      .first();
+
+    let userId: Id<"users">;
+    if (existingUser) {
+      userId = existingUser._id;
+    } else {
+      userId = await ctx.db.insert("users", {
+        name: args.customerInfo.name,
+        email: args.customerInfo.email,
+        phone: args.customerInfo.phone,
+        role: "traveler",
+        isActive: true,
+        onboardingCompleted: false,
+      });
+    }
+
+    // Create the booking
+    const bookingId = await ctx.db.insert("eventBookings", {
+      eventId: args.eventId as Id<"events">,
+      userId,
+      quantity: 1, // Default to 1, should be customizable
+      totalPrice: args.totalPrice,
+      status: args.status,
+      paymentStatus: args.paymentStatus,
+      paymentMethod: args.paymentMethod,
+      confirmationCode: args.confirmationCode,
+      customerInfo: args.customerInfo,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+      paymentIntentId: args.sessionId,
+      paymentCaptured: true,
+    });
+
+    // Send confirmation emails
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
+      customerEmail: args.customerInfo.email,
+      customerName: args.customerInfo.name,
+      assetName: event.title,
+      bookingType: "event",
+      confirmationCode: args.confirmationCode,
+      bookingDate: `${event.date} às ${event.time}`,
+      totalPrice: args.totalPrice,
+    });
+
+    return {
+      bookingId,
+      confirmationCode: args.confirmationCode,
+    };
+  },
+});
+
+/**
+ * Create restaurant reservation from payment link
+ */
+export const createRestaurantReservationFromPaymentLink = mutation({
+  args: v.object({
+    restaurantId: v.string(),
+    sessionId: v.string(),
+    status: v.string(),
+    paymentStatus: v.string(),
+    paymentMethod: v.string(),
+    totalPrice: v.number(),
+    customerInfo: v.object({
+      name: v.string(),
+      email: v.string(),
+      phone: v.string(),
+    }),
+    confirmationCode: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }),
+  returns: v.object({
+    reservationId: v.id("restaurantReservations"),
+    confirmationCode: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const restaurant = await ctx.db.get(args.restaurantId as Id<"restaurants">);
+    if (!restaurant) {
+      throw new Error("Restaurante não encontrado");
+    }
+
+    // Find or create user
+    const existingUser = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", args.customerInfo.email))
+      .first();
+
+    let userId: Id<"users">;
+    if (existingUser) {
+      userId = existingUser._id;
+    } else {
+      userId = await ctx.db.insert("users", {
+        name: args.customerInfo.name,
+        email: args.customerInfo.email,
+        phone: args.customerInfo.phone,
+        role: "traveler",
+        isActive: true,
+        onboardingCompleted: false,
+      });
+    }
+
+    // Create the reservation
+    const reservationId = await ctx.db.insert("restaurantReservations", {
+      restaurantId: args.restaurantId as Id<"restaurants">,
+      userId,
+      date: new Date().toISOString().split('T')[0], // Today as default
+      time: "19:00", // Default time, should be customizable
+      partySize: 2, // Default party size, should be customizable
+      name: args.customerInfo.name,
+      email: args.customerInfo.email,
+      phone: args.customerInfo.phone,
+      status: args.status,
+      confirmationCode: args.confirmationCode,
+      paymentIntentId: args.sessionId,
+      paymentCaptured: true,
+      totalPrice: args.totalPrice,
+      paymentStatus: args.paymentStatus,
+      paymentMethod: args.paymentMethod,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    });
+
+    // Send confirmation emails
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
+      customerEmail: args.customerInfo.email,
+      customerName: args.customerInfo.name,
+      assetName: restaurant.name,
+      bookingType: "restaurant",
+      confirmationCode: args.confirmationCode,
+      bookingDate: new Date().toISOString().split('T')[0],
+      totalPrice: args.totalPrice,
+    });
+
+    return {
+      reservationId,
+      confirmationCode: args.confirmationCode,
+    };
+  },
+});

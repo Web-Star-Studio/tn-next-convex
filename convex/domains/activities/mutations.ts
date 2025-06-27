@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Id } from "../../_generated/dataModel";
 import { mutationWithRole } from "../../domains/rbac";
 import { getCurrentUserRole, getCurrentUserConvexId, verifyPartnerAccess } from "../../domains/rbac";
+import { internal } from "../../_generated/api";
 import type { 
   ActivityCreateInput,
   ActivityUpdateInput,
@@ -57,6 +58,24 @@ export const create = mutationWithRole(["partner", "master"])({
       minParticipants,
       hasMultipleTickets: args.hasMultipleTickets || false, // default é false
     });
+    
+    // Automatically create Stripe Product and Payment Link
+    try {
+      const priceInCents = Math.round(args.price * 100); // Convert to cents
+      
+      await ctx.scheduler.runAfter(0, internal.domains.payments.actions.createStripeProductAndPaymentLink, {
+        assetType: "activity",
+        assetId: activityId,
+        assetTitle: args.title,
+        assetDescription: args.shortDescription,
+        price: priceInCents,
+        currency: "brl",
+        imageUrl: args.imageUrl,
+      });
+    } catch (error) {
+      console.error("Failed to create Stripe product/payment link for activity:", error);
+      // Don't fail the activity creation if Stripe fails
+    }
     
     return activityId;
   },
