@@ -2934,6 +2934,381 @@ export const getReservationWithPartnerDetails = query({
   },
 });
 
+/**
+ * Get pending bookings for partner dashboard
+ */
+export const getPendingBookingsForPartner = query({
+  args: v.object({
+    partnerId: v.id("users"), // Partners são users com role específico
+  }),
+  returns: v.array(v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    assetName: v.string(),
+    customerName: v.string(),
+    customerEmail: v.string(),
+    customerPhone: v.string(),
+    totalPrice: v.number(),
+    paymentIntentId: v.optional(v.string()),
+    paymentCaptured: v.optional(v.boolean()),
+    paymentStatus: v.string(),
+    confirmationCode: v.string(),
+    createdAt: v.number(),
+    bookingDetails: v.any(),
+    specialRequests: v.optional(v.string()),
+  })),
+  handler: async (ctx, args) => {
+    const pendingBookings: any[] = [];
+
+    // Get activity bookings
+    const activityBookings = await ctx.db
+      .query("activityBookings")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
+
+    for (const booking of activityBookings) {
+      const activity = await ctx.db.get(booking.activityId);
+      if (activity && activity.partnerId === args.partnerId) {
+        pendingBookings.push({
+          bookingId: booking._id,
+          bookingType: "activity",
+          assetName: activity.title,
+          customerName: booking.customerInfo.name,
+          customerEmail: booking.customerInfo.email,
+          customerPhone: booking.customerInfo.phone,
+          totalPrice: booking.totalPrice,
+          paymentIntentId: booking.paymentIntentId,
+          paymentCaptured: booking.paymentCaptured,
+          paymentStatus: booking.paymentStatus,
+          confirmationCode: booking.confirmationCode,
+          createdAt: booking.createdAt || booking._creationTime,
+          bookingDetails: {
+            date: booking.date,
+            time: booking.time,
+            participants: booking.participants,
+          },
+          specialRequests: booking.specialRequests,
+        });
+      }
+    }
+
+    // Get event bookings
+    const eventBookings = await ctx.db
+      .query("eventBookings")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
+
+    for (const booking of eventBookings) {
+      const event = await ctx.db.get(booking.eventId);
+      if (event && event.partnerId === args.partnerId) {
+        pendingBookings.push({
+          bookingId: booking._id,
+          bookingType: "event",
+          assetName: event.title,
+          customerName: booking.customerInfo.name,
+          customerEmail: booking.customerInfo.email,
+          customerPhone: booking.customerInfo.phone,
+          totalPrice: booking.totalPrice,
+          paymentIntentId: booking.paymentIntentId,
+          paymentCaptured: booking.paymentCaptured,
+          paymentStatus: booking.paymentStatus,
+          confirmationCode: booking.confirmationCode,
+          createdAt: booking.createdAt || booking._creationTime,
+          bookingDetails: {
+            quantity: booking.quantity,
+            date: event.date,
+            time: event.time,
+            location: event.location,
+          },
+          specialRequests: booking.specialRequests,
+        });
+      }
+    }
+
+    // Get restaurant reservations
+    const restaurantReservations = await ctx.db
+      .query("restaurantReservations")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
+
+    for (const reservation of restaurantReservations) {
+      const restaurant = await ctx.db.get(reservation.restaurantId);
+      if (restaurant && restaurant.partnerId === args.partnerId) {
+        pendingBookings.push({
+          bookingId: reservation._id,
+          bookingType: "restaurant",
+          assetName: restaurant.name,
+          customerName: reservation.name,
+          customerEmail: reservation.email,
+          customerPhone: reservation.phone,
+          totalPrice: 0, // Restaurant reservations may not have price
+          paymentIntentId: reservation.paymentIntentId,
+          paymentCaptured: reservation.paymentCaptured,
+          paymentStatus: reservation.paymentIntentId ? (reservation.paymentCaptured ? "paid" : "authorized") : "none",
+          confirmationCode: reservation.confirmationCode,
+          createdAt: reservation._creationTime,
+          bookingDetails: {
+            date: reservation.date,
+            time: reservation.time,
+            partySize: reservation.partySize,
+          },
+          specialRequests: reservation.specialRequests,
+        });
+      }
+    }
+
+    // Sort by creation time (newest first)
+    return pendingBookings.sort((a, b) => b.createdAt - a.createdAt);
+  },
+});
+
+/**
+ * Get booking history for partner dashboard (confirmed, cancelled, etc.)
+ */
+export const getBookingHistoryForPartner = query({
+  args: v.object({
+    partnerId: v.id("users"), // Partners são users com role específico
+    status: v.optional(v.string()), // "confirmed", "cancelled", etc.
+    limit: v.optional(v.number()),
+  }),
+  returns: v.array(v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    assetName: v.string(),
+    customerName: v.string(),
+    customerEmail: v.string(),
+    status: v.string(),
+    paymentStatus: v.string(),
+    totalPrice: v.number(),
+    confirmationCode: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    bookingDetails: v.any(),
+    refundId: v.optional(v.string()),
+    refundStatus: v.optional(v.string()),
+    cancellationReason: v.optional(v.string()),
+  })),
+  handler: async (ctx, args) => {
+    const limit = args.limit || 50;
+    const bookingHistory: any[] = [];
+
+    // Get activity bookings
+    const activityBookings = args.status 
+      ? await ctx.db.query("activityBookings")
+          .withIndex("by_status", (q) => q.eq("status", args.status!))
+          .collect()
+      : await ctx.db.query("activityBookings").collect();
+
+    for (const booking of activityBookings) {
+      const activity = await ctx.db.get(booking.activityId);
+      if (activity && activity.partnerId === args.partnerId) {
+        if (!args.status || booking.status === args.status) {
+          bookingHistory.push({
+            bookingId: booking._id,
+            bookingType: "activity",
+            assetName: activity.title,
+            customerName: booking.customerInfo.name,
+            customerEmail: booking.customerInfo.email,
+            status: booking.status,
+            paymentStatus: booking.paymentStatus,
+            totalPrice: booking.totalPrice,
+            confirmationCode: booking.confirmationCode,
+            createdAt: booking.createdAt || booking._creationTime,
+            updatedAt: booking.updatedAt || booking._creationTime,
+            bookingDetails: {
+              date: booking.date,
+              time: booking.time,
+              participants: booking.participants,
+            },
+            refundId: booking.refundId,
+            refundStatus: booking.refundStatus,
+            cancellationReason: booking.cancellationReason,
+          });
+        }
+      }
+    }
+
+    // Sort by update time (newest first) and limit
+    return bookingHistory
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
+  },
+});
+
+/**
+ * Get payment summary for partner dashboard
+ */
+export const getPaymentSummaryForPartner = query({
+  args: v.object({
+    partnerId: v.id("users"), // Partners são users com role específico
+    dateRange: v.optional(v.object({
+      startDate: v.string(),
+      endDate: v.string(),
+    })),
+  }),
+  returns: v.object({
+    totalRevenue: v.number(),
+    totalBookings: v.number(),
+    pendingPayments: v.number(),
+    completedPayments: v.number(),
+    refundedAmount: v.number(),
+    refundCount: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    let totalRevenue = 0;
+    let totalBookings = 0;
+    let pendingPayments = 0;
+    let completedPayments = 0;
+    let refundedAmount = 0;
+    let refundCount = 0;
+
+    // Get activity bookings
+    const activityBookings = await ctx.db.query("activityBookings").collect();
+    for (const booking of activityBookings) {
+      const activity = await ctx.db.get(booking.activityId);
+      if (activity && activity.partnerId === args.partnerId) {
+        totalBookings++;
+        
+        if (booking.status === "confirmed" && booking.paymentStatus === "paid") {
+          totalRevenue += booking.totalPrice;
+          completedPayments++;
+        } else if (booking.status === "pending" && booking.paymentIntentId) {
+          pendingPayments++;
+        }
+
+        if (booking.refundId && booking.refundStatus === "succeeded") {
+          refundedAmount += booking.totalPrice;
+          refundCount++;
+        }
+      }
+    }
+
+    // Add similar logic for other booking types...
+
+    return {
+      totalRevenue,
+      totalBookings,
+      pendingPayments,
+      completedPayments,
+      refundedAmount,
+      refundCount,
+    };
+  },
+});
+
+/**
+ * Get booking details for partner (single booking view)
+ */
+export const getBookingDetailsForPartner = query({
+  args: v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    partnerId: v.id("users"), // Partners são users com role específico
+  }),
+  returns: v.union(
+    v.object({
+      booking: v.any(),
+      asset: v.any(),
+      customer: v.any(),
+      paymentDetails: v.object({
+        paymentIntentId: v.optional(v.string()),
+        paymentCaptured: v.optional(v.boolean()),
+        paymentStatus: v.string(),
+        refundId: v.optional(v.string()),
+        refundStatus: v.optional(v.string()),
+      }),
+      timeline: v.array(v.object({
+        timestamp: v.number(),
+        event: v.string(),
+        description: v.string(),
+      })),
+    }),
+    v.null()
+  ),
+  handler: async (ctx, args) => {
+    // Get booking based on type
+    let booking: any;
+    let asset: any;
+
+    switch (args.bookingType) {
+      case "activity":
+        booking = await ctx.db.get(args.bookingId as Id<"activityBookings">);
+        if (booking) {
+          asset = await ctx.db.get(booking.activityId);
+        }
+        break;
+      case "event":
+        booking = await ctx.db.get(args.bookingId as Id<"eventBookings">);
+        if (booking) {
+          asset = await ctx.db.get(booking.eventId);
+        }
+        break;
+      case "restaurant":
+        booking = await ctx.db.get(args.bookingId as Id<"restaurantReservations">);
+        if (booking) {
+          asset = await ctx.db.get(booking.restaurantId);
+        }
+        break;
+      default:
+        return null;
+    }
+
+    if (!booking || !asset || asset.partnerId !== args.partnerId) {
+      return null;
+    }
+
+    // Get customer details
+    const customer = await ctx.db.get(booking.userId);
+
+    // Create timeline
+    const timeline = [
+      {
+        timestamp: booking.createdAt || booking._creationTime,
+        event: "booking_created",
+        description: "Reserva criada pelo cliente",
+      },
+    ];
+
+    if (booking.paymentIntentId) {
+      timeline.push({
+        timestamp: booking.createdAt || booking._creationTime,
+        event: "payment_authorized",
+        description: "Pagamento autorizado",
+      });
+    }
+
+    if (booking.status === "confirmed") {
+      timeline.push({
+        timestamp: booking.updatedAt,
+        event: "booking_confirmed",
+        description: "Reserva confirmada pelo parceiro",
+      });
+    }
+
+    if (booking.status === "cancelled") {
+      timeline.push({
+        timestamp: booking.updatedAt,
+        event: "booking_cancelled",
+        description: `Reserva cancelada. Motivo: ${booking.cancellationReason || "Não informado"}`,
+      });
+    }
+
+    return {
+      booking,
+      asset,
+      customer,
+      paymentDetails: {
+        paymentIntentId: booking.paymentIntentId,
+        paymentCaptured: booking.paymentCaptured,
+        paymentStatus: booking.paymentStatus || "none",
+        refundId: booking.refundId,
+        refundStatus: booking.refundStatus,
+      },
+      timeline: timeline.sort((a, b) => a.timestamp - b.timestamp),
+    };
+  },
+});
+
 
 
 

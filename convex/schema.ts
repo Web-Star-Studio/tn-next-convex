@@ -413,6 +413,11 @@ export default defineSchema({
     status: v.string(),                                 // Status (ex: "pending", "confirmed", "canceled")
     confirmationCode: v.string(),                       // Código de confirmação
     tableId: v.optional(v.id("restaurantTables")),      // Mesa atribuída (opcional)
+    paymentIntentId: v.optional(v.string()),        // Stripe PaymentIntent ID
+    paymentCaptured: v.optional(v.boolean()),        // Se o pagamento foi capturado
+    refundId: v.optional(v.string()),                // Stripe Refund ID se aplicável
+    refundStatus: v.optional(v.string()),            // Status do refund: pending, succeeded, failed
+    cancellationReason: v.optional(v.string()),      // Motivo do cancelamento
   })
     .index("by_restaurant", ["restaurantId"])
     .index("by_user", ["userId"])
@@ -557,6 +562,11 @@ export default defineSchema({
     }),
     createdAt: v.number(),
     updatedAt: v.number(),
+    paymentIntentId: v.optional(v.string()),        // Stripe PaymentIntent ID
+    paymentCaptured: v.optional(v.boolean()),        // Se o pagamento foi capturado
+    refundId: v.optional(v.string()),                // Stripe Refund ID se aplicável
+    refundStatus: v.optional(v.string()),            // Status do refund: pending, succeeded, failed
+    cancellationReason: v.optional(v.string()),      // Motivo do cancelamento
   })
     .index("by_activity", ["activityId"])
     .index("by_user", ["userId"])
@@ -584,6 +594,11 @@ export default defineSchema({
     }),
     createdAt: v.number(),
     updatedAt: v.number(),
+    paymentIntentId: v.optional(v.string()),        // Stripe PaymentIntent ID
+    paymentCaptured: v.optional(v.boolean()),        // Se o pagamento foi capturado
+    refundId: v.optional(v.string()),                // Stripe Refund ID se aplicável
+    refundStatus: v.optional(v.string()),            // Status do refund: pending, succeeded, failed
+    cancellationReason: v.optional(v.string()),      // Motivo do cancelamento
   })
     .index("by_event", ["eventId"])
     .index("by_user", ["userId"])
@@ -641,6 +656,11 @@ export default defineSchema({
     partnerNotes: v.optional(v.string()), // Notes from partner/employee
     createdAt: v.number(),
     updatedAt: v.number(),
+    paymentIntentId: v.optional(v.string()),        // Stripe PaymentIntent ID
+    paymentCaptured: v.optional(v.boolean()),        // Se o pagamento foi capturado
+    refundId: v.optional(v.string()),                // Stripe Refund ID se aplicável
+    refundStatus: v.optional(v.string()),            // Status do refund: pending, succeeded, failed
+    cancellationReason: v.optional(v.string()),      // Motivo do cancelamento
   })
     .index("by_vehicleId", ["vehicleId"])
     .index("by_userId", ["userId"])
@@ -736,6 +756,11 @@ export default defineSchema({
     }),
     createdAt: v.number(),                              // Timestamp de criação
     updatedAt: v.number(),                              // Timestamp de atualização
+    paymentIntentId: v.optional(v.string()),        // Stripe PaymentIntent ID
+    paymentCaptured: v.optional(v.boolean()),        // Se o pagamento foi capturado
+    refundId: v.optional(v.string()),                // Stripe Refund ID se aplicável
+    refundStatus: v.optional(v.string()),            // Status do refund: pending, succeeded, failed
+    cancellationReason: v.optional(v.string()),      // Motivo do cancelamento
   })
     .index("by_accommodation", ["accommodationId"])     // Índice por hospedagem
     .index("by_user", ["userId"])                       // Índice por usuário

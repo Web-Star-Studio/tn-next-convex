@@ -1737,3 +1737,708 @@ export const cancelAccommodationBookingInternal = mutation({
     return null;
   },
 });
+
+/**
+ * Update booking payment status after Stripe authorization
+ */
+export const updateBookingPaymentStatus = mutation({
+  args: v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    paymentIntentId: v.string(),
+    paymentStatus: v.string(),
+    paymentCaptured: v.optional(v.boolean()),
+  }),
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const updateData: any = {
+      paymentIntentId: args.paymentIntentId,
+      paymentStatus: args.paymentStatus,
+      paymentCaptured: args.paymentCaptured || false,
+      updatedAt: Date.now(),
+    };
+
+    // Update the appropriate booking table based on type
+    switch (args.bookingType) {
+      case "activity":
+        await ctx.db.patch(args.bookingId as Id<"activityBookings">, updateData);
+        break;
+      case "event":
+        await ctx.db.patch(args.bookingId as Id<"eventBookings">, updateData);
+        break;
+      case "vehicle":
+        await ctx.db.patch(args.bookingId as Id<"vehicleBookings">, updateData);
+        break;
+      case "accommodation":
+        await ctx.db.patch(args.bookingId as Id<"accommodationBookings">, updateData);
+        break;
+      case "restaurant":
+        await ctx.db.patch(args.bookingId as Id<"restaurantReservations">, updateData);
+        break;
+      default:
+        throw new Error(`Tipo de booking inválido: ${args.bookingType}`);
+    }
+
+    return null;
+  },
+});
+
+/**
+ * Capture payment and confirm booking (Partner confirms reservation)
+ */
+export const capturePaymentAndConfirmBooking = mutation({
+  args: v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    partnerId: v.id("users"),
+    partnerNotes: v.optional(v.string()),
+  }),
+  returns: v.object({
+    success: v.boolean(),
+    paymentIntentId: v.optional(v.string()),
+    message: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    // Get current user and validate it's the partner
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Usuário não autenticado");
+    }
+
+    const user = await ctx.db.get(args.partnerId);
+    if (!user || user.clerkId !== identity.subject) {
+      throw new Error("Não autorizado");
+    }
+
+    // Get the booking based on type
+    let booking: any = null;
+    switch (args.bookingType) {
+      case "activity":
+        booking = await ctx.db.get(args.bookingId as Id<"activityBookings">);
+        break;
+      case "event":
+        booking = await ctx.db.get(args.bookingId as Id<"eventBookings">);
+        break;
+      case "vehicle":
+        booking = await ctx.db.get(args.bookingId as Id<"vehicleBookings">);
+        break;
+      case "accommodation":
+        booking = await ctx.db.get(args.bookingId as Id<"accommodationBookings">);
+        break;
+      case "restaurant":
+        booking = await ctx.db.get(args.bookingId as Id<"restaurantReservations">);
+        break;
+      default:
+        throw new Error(`Tipo de booking inválido: ${args.bookingType}`);
+    }
+
+    if (!booking) {
+      throw new Error("Reserva não encontrada");
+    }
+
+    if (booking.status !== BOOKING_STATUS.PENDING) {
+      throw new Error("Reserva não está pendente");
+    }
+
+    if (!booking.paymentIntentId) {
+      throw new Error("PaymentIntent não encontrado");
+    }
+
+    // Schedule capture payment action
+    await ctx.scheduler.runAfter(0, internal.domains.payments.actions.captureStripePayment, {
+      paymentIntentId: booking.paymentIntentId,
+      bookingId: args.bookingId,
+      bookingType: args.bookingType,
+    });
+
+    // Update booking status
+    const updateData: any = {
+      status: BOOKING_STATUS.CONFIRMED,
+      paymentCaptured: true,
+      partnerNotes: args.partnerNotes,
+      updatedAt: Date.now(),
+    };
+
+    switch (args.bookingType) {
+      case "activity":
+        await ctx.db.patch(args.bookingId as Id<"activityBookings">, updateData);
+        break;
+      case "event":
+        await ctx.db.patch(args.bookingId as Id<"eventBookings">, updateData);
+        break;
+      case "vehicle":
+        await ctx.db.patch(args.bookingId as Id<"vehicleBookings">, updateData);
+        break;
+      case "accommodation":
+        await ctx.db.patch(args.bookingId as Id<"accommodationBookings">, updateData);
+        break;
+      case "restaurant":
+        await ctx.db.patch(args.bookingId as Id<"restaurantReservations">, updateData);
+        break;
+    }
+
+    return {
+      success: true,
+      paymentIntentId: booking.paymentIntentId,
+      message: "Reserva confirmada e pagamento capturado",
+    };
+  },
+});
+
+/**
+ * Cancel booking and refund payment (Partner cancels reservation)
+ */
+export const cancelBookingAndRefundPayment = mutation({
+  args: v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    partnerId: v.id("users"),
+    cancellationReason: v.string(),
+    partnerNotes: v.optional(v.string()),
+  }),
+  returns: v.object({
+    success: v.boolean(),
+    paymentIntentId: v.optional(v.string()),
+    message: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    // Get current user and validate it's the partner
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Usuário não autenticado");
+    }
+
+    const user = await ctx.db.get(args.partnerId);
+    if (!user || user.clerkId !== identity.subject) {
+      throw new Error("Não autorizado");
+    }
+
+    // Get the booking based on type
+    let booking: any = null;
+    switch (args.bookingType) {
+      case "activity":
+        booking = await ctx.db.get(args.bookingId as Id<"activityBookings">);
+        break;
+      case "event":
+        booking = await ctx.db.get(args.bookingId as Id<"eventBookings">);
+        break;
+      case "vehicle":
+        booking = await ctx.db.get(args.bookingId as Id<"vehicleBookings">);
+        break;
+      case "accommodation":
+        booking = await ctx.db.get(args.bookingId as Id<"accommodationBookings">);
+        break;
+      case "restaurant":
+        booking = await ctx.db.get(args.bookingId as Id<"restaurantReservations">);
+        break;
+      default:
+        throw new Error(`Tipo de booking inválido: ${args.bookingType}`);
+    }
+
+    if (!booking) {
+      throw new Error("Reserva não encontrada");
+    }
+
+    if (booking.status === BOOKING_STATUS.CANCELED) {
+      throw new Error("Reserva já está cancelada");
+    }
+
+    if (!booking.paymentIntentId) {
+      throw new Error("PaymentIntent não encontrado");
+    }
+
+    // Schedule refund/cancel action based on payment status
+    if (booking.paymentCaptured) {
+      // Payment was captured, need to create refund
+      await ctx.scheduler.runAfter(0, internal.domains.payments.actions.refundStripePayment, {
+        paymentIntentId: booking.paymentIntentId,
+        bookingId: args.bookingId,
+        bookingType: args.bookingType,
+        reason: args.cancellationReason,
+      });
+    } else {
+      // Payment was only authorized, can cancel without fees
+      await ctx.scheduler.runAfter(0, internal.domains.payments.actions.cancelStripePayment, {
+        paymentIntentId: booking.paymentIntentId,
+        bookingId: args.bookingId,
+        bookingType: args.bookingType,
+      });
+    }
+
+    // Update booking status
+    const updateData: any = {
+      status: BOOKING_STATUS.CANCELED,
+      cancellationReason: args.cancellationReason,
+      partnerNotes: args.partnerNotes,
+      updatedAt: Date.now(),
+    };
+
+    switch (args.bookingType) {
+      case "activity":
+        await ctx.db.patch(args.bookingId as Id<"activityBookings">, updateData);
+        break;
+      case "event":
+        await ctx.db.patch(args.bookingId as Id<"eventBookings">, updateData);
+        break;
+      case "vehicle":
+        await ctx.db.patch(args.bookingId as Id<"vehicleBookings">, updateData);
+        break;
+      case "accommodation":
+        await ctx.db.patch(args.bookingId as Id<"accommodationBookings">, updateData);
+        break;
+      case "restaurant":
+        await ctx.db.patch(args.bookingId as Id<"restaurantReservations">, updateData);
+        break;
+    }
+
+    return {
+      success: true,
+      paymentIntentId: booking.paymentIntentId,
+      message: booking.paymentCaptured ? "Reserva cancelada e reembolso processado" : "Reserva cancelada e autorização cancelada",
+    };
+  },
+});
+
+/**
+ * Update booking refund status
+ */
+export const updateBookingRefundStatus = mutation({
+  args: v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    refundId: v.string(),
+    refundStatus: v.string(),
+  }),
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const updateData: any = {
+      refundId: args.refundId,
+      refundStatus: args.refundStatus,
+      updatedAt: Date.now(),
+    };
+
+    // Update the appropriate booking table based on type
+    switch (args.bookingType) {
+      case "activity":
+        await ctx.db.patch(args.bookingId as Id<"activityBookings">, updateData);
+        break;
+      case "event":
+        await ctx.db.patch(args.bookingId as Id<"eventBookings">, updateData);
+        break;
+      case "vehicle":
+        await ctx.db.patch(args.bookingId as Id<"vehicleBookings">, updateData);
+        break;
+      case "accommodation":
+        await ctx.db.patch(args.bookingId as Id<"accommodationBookings">, updateData);
+        break;
+      case "restaurant":
+        await ctx.db.patch(args.bookingId as Id<"restaurantReservations">, updateData);
+        break;
+      default:
+        throw new Error(`Tipo de booking inválido: ${args.bookingType}`);
+    }
+
+    return null;
+  },
+});
+
+/**
+ * Create activity booking with payment (called by webhook)
+ */
+export const createActivityBookingWithPayment = mutation({
+  args: v.object({
+    activityId: v.id("activities"),
+    userId: v.id("users"),
+    ticketId: v.optional(v.id("activityTickets")),
+    date: v.string(),
+    time: v.string(),
+    participants: v.number(),
+    paymentIntentId: v.string(),
+    paymentCaptured: v.boolean(),
+    totalPrice: v.number(),
+    customerInfo: v.object({
+      name: v.string(),
+      email: v.string(),
+      phone: v.string(),
+    }),
+    specialRequests: v.optional(v.string()),
+  }),
+  returns: v.object({
+    bookingId: v.id("activityBookings"),
+    confirmationCode: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const confirmationCode = generateConfirmationCode();
+
+    // Create booking with payment info
+    const bookingId = await ctx.db.insert("activityBookings", {
+      activityId: args.activityId,
+      userId: args.userId,
+      ticketId: args.ticketId,
+      date: args.date,
+      time: args.time,
+      participants: args.participants,
+      totalPrice: args.totalPrice,
+      status: BOOKING_STATUS.PENDING, // Partner ainda precisa confirmar
+      paymentStatus: PAYMENT_STATUS.AUTHORIZED, // Pagamento autorizado, não capturado
+      paymentIntentId: args.paymentIntentId,
+      paymentCaptured: args.paymentCaptured,
+      confirmationCode,
+      customerInfo: args.customerInfo,
+      specialRequests: args.specialRequests,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    // Get activity for email notifications
+    const activity = await ctx.db.get(args.activityId);
+    if (!activity) {
+      throw new Error("Atividade não encontrada");
+    }
+
+    // Send confirmation email to customer
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
+      customerEmail: args.customerInfo.email,
+      customerName: args.customerInfo.name,
+      assetName: activity.title,
+      bookingType: "activity",
+      confirmationCode,
+      bookingDate: args.date,
+      totalPrice: args.totalPrice,
+      bookingDetails: {
+        activityId: activity._id,
+        participants: args.participants,
+        date: args.date,
+        time: args.time,
+        specialRequests: args.specialRequests,
+      },
+    });
+
+    // Send notification to partner
+    const partner = await ctx.db.get(activity.partnerId);
+    if (partner && partner.email) {
+      await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendPartnerNewBookingEmail, {
+        partnerEmail: partner.email,
+        partnerName: partner.name || "Parceiro",
+        customerName: args.customerInfo.name,
+        customerEmail: args.customerInfo.email,
+        customerPhone: args.customerInfo.phone,
+        assetName: activity.title,
+        bookingType: "activity",
+        confirmationCode,
+        bookingDate: args.date,
+        totalPrice: args.totalPrice,
+        bookingDetails: {
+          activityId: activity._id,
+          participants: args.participants,
+          date: args.date,
+          time: args.time,
+          specialRequests: args.specialRequests,
+        },
+      });
+    }
+
+    return { bookingId, confirmationCode };
+  },
+});
+
+/**
+ * Create event booking with payment (called by webhook)
+ */
+export const createEventBookingWithPayment = mutation({
+  args: v.object({
+    eventId: v.id("events"),
+    userId: v.id("users"),
+    ticketId: v.optional(v.id("eventTickets")),
+    quantity: v.number(),
+    paymentIntentId: v.string(),
+    paymentCaptured: v.boolean(),
+    totalPrice: v.number(),
+    customerInfo: v.object({
+      name: v.string(),
+      email: v.string(),
+      phone: v.string(),
+    }),
+    specialRequests: v.optional(v.string()),
+  }),
+  returns: v.object({
+    bookingId: v.id("eventBookings"),
+    confirmationCode: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const confirmationCode = generateConfirmationCode();
+
+    const bookingId = await ctx.db.insert("eventBookings", {
+      eventId: args.eventId,
+      userId: args.userId,
+      ticketId: args.ticketId,
+      quantity: args.quantity,
+      totalPrice: args.totalPrice,
+      status: BOOKING_STATUS.PENDING,
+      paymentStatus: PAYMENT_STATUS.AUTHORIZED,
+      paymentIntentId: args.paymentIntentId,
+      paymentCaptured: args.paymentCaptured,
+      confirmationCode,
+      customerInfo: args.customerInfo,
+      specialRequests: args.specialRequests,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const event = await ctx.db.get(args.eventId);
+    if (!event) {
+      throw new Error("Evento não encontrado");
+    }
+
+    // Send confirmation emails (similar pattern)
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
+      customerEmail: args.customerInfo.email,
+      customerName: args.customerInfo.name,
+      assetName: event.title,
+      bookingType: "event",
+      confirmationCode,
+      bookingDate: `${event.date} às ${event.time}`,
+      totalPrice: args.totalPrice,
+      bookingDetails: {
+        eventId: event._id,
+        quantity: args.quantity,
+        ticketId: args.ticketId,
+        location: event.location,
+        specialRequests: args.specialRequests,
+      },
+    });
+
+    return { bookingId, confirmationCode };
+  },
+});
+
+/**
+ * Partner confirms booking (captures payment)
+ */
+export const confirmBookingByPartner = mutation({
+  args: v.object({
+    bookingId: v.string(),
+    bookingType: v.string(), // "activity" | "event" | "vehicle" | "accommodation" | "restaurant"
+    partnerId: v.id("users"), // Partners são users com role específico
+  }),
+  returns: v.object({
+    success: v.boolean(),
+    message: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    // Get booking based on type
+    let booking: any;
+    switch (args.bookingType) {
+      case "activity":
+        booking = await ctx.db.get(args.bookingId as Id<"activityBookings">);
+        break;
+      case "event":
+        booking = await ctx.db.get(args.bookingId as Id<"eventBookings">);
+        break;
+      case "vehicle":
+        booking = await ctx.db.get(args.bookingId as Id<"vehicleBookings">);
+        break;
+      case "accommodation":
+        booking = await ctx.db.get(args.bookingId as Id<"accommodationBookings">);
+        break;
+      case "restaurant":
+        booking = await ctx.db.get(args.bookingId as Id<"restaurantReservations">);
+        break;
+      default:
+        throw new Error("Tipo de booking inválido");
+    }
+
+    if (!booking) {
+      throw new Error("Reserva não encontrada");
+    }
+
+    if (booking.status !== BOOKING_STATUS.PENDING) {
+      throw new Error("Reserva não está pendente");
+    }
+
+    // Verify partner permission
+    const asset = await getAssetFromBooking(ctx, booking, args.bookingType);
+    if (!asset || (asset.partnerId && asset.partnerId !== args.partnerId)) {
+      throw new Error("Você não tem permissão para confirmar esta reserva");
+    }
+
+    // Update booking status
+    const updateData = {
+      status: BOOKING_STATUS.CONFIRMED,
+      paymentStatus: PAYMENT_STATUS.PAID, // Will be updated by the capture action
+      updatedAt: Date.now(),
+    };
+
+    await updateBookingByType(ctx, args.bookingId, args.bookingType, updateData);
+
+    // Capture payment if there's a paymentIntentId
+    if (booking.paymentIntentId) {
+      await ctx.scheduler.runAfter(0, internal.domains.payments.actions.captureStripePayment, {
+        paymentIntentId: booking.paymentIntentId,
+        bookingId: args.bookingId,
+        bookingType: args.bookingType,
+      });
+    }
+
+    // Send confirmation email to customer
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingStatusUpdateEmail, {
+      customerEmail: booking.customerInfo?.email || booking.email,
+      customerName: booking.customerInfo?.name || booking.name,
+      assetName: asset?.title || asset?.name || "Asset",
+      bookingType: args.bookingType,
+      confirmationCode: booking.confirmationCode,
+      newStatus: "confirmed",
+      message: "Sua reserva foi confirmada pelo parceiro! O pagamento foi processado com sucesso.",
+    });
+
+    return {
+      success: true,
+      message: "Reserva confirmada com sucesso!",
+    };
+  },
+});
+
+/**
+ * Partner cancels booking (refunds payment)
+ */
+export const cancelBookingByPartner = mutation({
+  args: v.object({
+    bookingId: v.string(),
+    bookingType: v.string(),
+    partnerId: v.id("users"), // Partners são users com role específico
+    cancellationReason: v.string(),
+  }),
+  returns: v.object({
+    success: v.boolean(),
+    message: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    // Get booking
+    let booking: any;
+    switch (args.bookingType) {
+      case "activity":
+        booking = await ctx.db.get(args.bookingId as Id<"activityBookings">);
+        break;
+      case "event":
+        booking = await ctx.db.get(args.bookingId as Id<"eventBookings">);
+        break;
+      case "vehicle":
+        booking = await ctx.db.get(args.bookingId as Id<"vehicleBookings">);
+        break;
+      case "accommodation":
+        booking = await ctx.db.get(args.bookingId as Id<"accommodationBookings">);
+        break;
+      case "restaurant":
+        booking = await ctx.db.get(args.bookingId as Id<"restaurantReservations">);
+        break;
+      default:
+        throw new Error("Tipo de booking inválido");
+    }
+
+    if (!booking) {
+      throw new Error("Reserva não encontrada");
+    }
+
+    if (booking.status === BOOKING_STATUS.CANCELED) {
+      throw new Error("Reserva já está cancelada");
+    }
+
+    // Verify partner permission
+    const asset = await getAssetFromBooking(ctx, booking, args.bookingType);
+    if (!asset || (asset.partnerId && asset.partnerId !== args.partnerId)) {
+      throw new Error("Você não tem permissão para cancelar esta reserva");
+    }
+
+    // Update booking status
+    const updateData = {
+      status: BOOKING_STATUS.CANCELED,
+      cancellationReason: args.cancellationReason,
+      updatedAt: Date.now(),
+    };
+
+    await updateBookingByType(ctx, args.bookingId, args.bookingType, updateData);
+
+    // Process refund if there's a payment
+    if (booking.paymentIntentId) {
+      if (booking.paymentCaptured) {
+        // Payment was already captured, need to refund
+        await ctx.scheduler.runAfter(0, internal.domains.payments.actions.refundStripePayment, {
+          paymentIntentId: booking.paymentIntentId,
+          bookingId: args.bookingId,
+          bookingType: args.bookingType,
+          reason: args.cancellationReason,
+        });
+      } else {
+        // Payment was only authorized, just cancel it
+        await ctx.scheduler.runAfter(0, internal.domains.payments.actions.cancelStripePayment, {
+          paymentIntentId: booking.paymentIntentId,
+          bookingId: args.bookingId,
+          bookingType: args.bookingType,
+        });
+      }
+    }
+
+    // Send cancellation email to customer
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingStatusUpdateEmail, {
+      customerEmail: booking.customerInfo?.email || booking.email,
+      customerName: booking.customerInfo?.name || booking.name,
+      assetName: asset?.title || asset?.name || "Asset",
+      bookingType: args.bookingType,
+      confirmationCode: booking.confirmationCode,
+      newStatus: "cancelled",
+      message: `Sua reserva foi cancelada pelo parceiro. Motivo: ${args.cancellationReason}. O reembolso será processado automaticamente.`,
+    });
+
+    return {
+      success: true,
+      message: "Reserva cancelada com sucesso!",
+    };
+  },
+});
+
+// Helper functions
+async function getAssetFromBooking(ctx: MutationCtx, booking: any, bookingType: string): Promise<any> {
+  let asset: any = null;
+  
+  switch (bookingType) {
+    case "activity":
+      asset = await ctx.db.get(booking.activityId);
+      break;
+    case "event":
+      asset = await ctx.db.get(booking.eventId);
+      break;
+    case "vehicle":
+      asset = await ctx.db.get(booking.vehicleId);
+      break;
+    case "accommodation":
+      asset = await ctx.db.get(booking.accommodationId);
+      break;
+    case "restaurant":
+      asset = await ctx.db.get(booking.restaurantId);
+      break;
+    default:
+      return null;
+  }
+  
+  return asset;
+}
+
+async function updateBookingByType(ctx: MutationCtx, bookingId: string, bookingType: string, updateData: any) {
+  switch (bookingType) {
+    case "activity":
+      await ctx.db.patch(bookingId as Id<"activityBookings">, updateData);
+      break;
+    case "event":
+      await ctx.db.patch(bookingId as Id<"eventBookings">, updateData);
+      break;
+    case "vehicle":
+      await ctx.db.patch(bookingId as Id<"vehicleBookings">, updateData);
+      break;
+    case "accommodation":
+      await ctx.db.patch(bookingId as Id<"accommodationBookings">, updateData);
+      break;
+    case "restaurant":
+      await ctx.db.patch(bookingId as Id<"restaurantReservations">, updateData);
+      break;
+  }
+}

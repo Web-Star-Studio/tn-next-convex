@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Ticket, Users, MapPin, Calendar as CalendarIcon } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "@/../convex/_generated/dataModel";
+import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,8 +29,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { cardStyles, buttonStyles, formStyles, badgeStyles } from "@/lib/ui-config";
-import { StripeProvider } from "@/components/payments/StripeProvider";
-import BookingPaymentForm from "@/components/payments/BookingPaymentForm";
+import PaymentWrapper from "@/components/payments/PaymentWrapper";
 
 interface EventBookingFormProps {
   eventId: Id<"events">;
@@ -65,13 +65,29 @@ export function EventBookingForm({
     email: "",
     phone: "",
   });
+  const [phoneInput, setPhoneInput] = useState("");
   const [specialRequests, setSpecialRequests] = useState("");
   const [paymentOpen, setPaymentOpen] = useState(false);
+
+  // Get current user information
+  const { user, isLoading: userLoading } = useCurrentUser();
 
   // Get event tickets if available
   const tickets = useQuery(api.domains.events.queries.getEventTickets, {
     eventId,
   });
+
+  // Auto-fill customer info with user data
+  useEffect(() => {
+    if (user && !userLoading) {
+      setCustomerInfo({
+        name: user.name || "",
+        email: user.email || "",
+        phone: "",
+      });
+      setPhoneInput("");
+    }
+  }, [user, userLoading]);
 
   // Calculate price
   const getPrice = () => {
@@ -87,19 +103,26 @@ export function EventBookingForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!customerInfo.name || !customerInfo.email || !customerInfo.phone) {
-      toast.error("Preencha todas as informações de contato");
+    if (!user) {
+      toast.error("Você precisa estar logado para fazer uma reserva");
       return;
     }
 
-    // Open payment dialog instead of creating booking directly
+    if (!customerInfo.name || !customerInfo.email) {
+      toast.error("Informações do usuário incompletas. Verifique seu perfil.");
+      return;
+    }
+
+    if (!phoneInput.trim()) {
+      toast.error("Por favor, preencha seu telefone para continuar");
+      return;
+    }
+
+    // Open payment dialog
     setPaymentOpen(true);
   };
 
   const handlePaymentSuccess = async (paymentIntentId: string) => {
-    // Important: Payment approved but booking is created with "pending" status
-    // Partner/Employee needs to confirm the booking
-    
     toast.success("Pagamento aprovado!", {
       description: `${formatCurrency(totalPrice)} pagos com sucesso.`,
     });
@@ -107,14 +130,14 @@ export function EventBookingForm({
     // Reset form
     setQuantity(1);
     setSelectedTicketId(undefined);
-    setCustomerInfo({ name: "", email: "", phone: "" });
     setSpecialRequests("");
+    setPhoneInput("");
     setPaymentOpen(false);
     
     // Show booking status information
     setTimeout(() => {
-      toast.success("Solicitação de ingresso enviada!", {
-        description: "Aguardando confirmação do organizador. Você receberá um email quando a compra for confirmada.",
+      toast.success("Ingresso(s) adquirido(s)!", {
+        description: "Aguardando confirmação. Você receberá os ingressos por email.",
       });
     }, 2000);
   };
@@ -122,6 +145,35 @@ export function EventBookingForm({
   // Parse event date for display
   const eventDate = new Date(event.date);
   const isEventPast = eventDate < new Date();
+
+  if (userLoading) {
+    return (
+      <div className={cn(cardStyles.base, className)}>
+        <div className={cardStyles.content.default}>
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <span className="ml-3 text-gray-600">Carregando...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={cn(cardStyles.base, className)}>
+        <div className={cardStyles.content.default}>
+          <div className="text-center py-8">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Login necessário</h3>
+            <p className="text-gray-600 mb-4">Você precisa estar logado para fazer uma reserva.</p>
+            <Button onClick={() => window.location.href = '/sign-in'}>
+              Fazer Login
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -147,6 +199,39 @@ export function EventBookingForm({
                 <div className={cn(badgeStyles.base, badgeStyles.variant.warning)}>
                   Este evento já aconteceu
                 </div>
+              )}
+            </div>
+
+            {/* User info display */}
+            <div className="bg-blue-50 p-4 rounded-md">
+              <h4 className="font-semibold text-gray-900 mb-2">Informações da compra:</h4>
+              <div className="space-y-3 text-sm text-gray-700">
+                <div>
+                  <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
+                  <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
+                </div>
+                
+                {/* Campo editável para telefone */}
+                <div className="space-y-1">
+                  <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
+                    Telefone para contato *
+                  </Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    placeholder="(11) 99999-9999"
+                    value={phoneInput}
+                    onChange={(e) => setPhoneInput(e.target.value)}
+                    className="bg-white border-gray-300 text-sm"
+                    required
+                  />
+                </div>
+              </div>
+              
+              {(!customerInfo.name || !customerInfo.email) && (
+                <p className="text-amber-600 text-xs mt-2">
+                  ⚠️ Complete suas informações no perfil para comprar ingressos
+                </p>
               )}
             </div>
 
@@ -211,48 +296,6 @@ export function EventBookingForm({
               </p>
             </div>
 
-            {/* Customer Information */}
-            <div className="space-y-4 pt-4 border-t">
-              <h4 className="font-semibold text-gray-900">Informações do comprador</h4>
-              
-              <div className="space-y-2">
-                <Label htmlFor="name">Nome completo</Label>
-                <Input
-                  id="name"
-                  type="text"
-                  value={customerInfo.name}
-                  onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                  className={formStyles.input.base}
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={customerInfo.email}
-                  onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
-                  className={formStyles.input.base}
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="phone">Telefone</Label>
-                <Input
-                  id="phone"
-                  type="tel"
-                  value={customerInfo.phone}
-                  onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-                  className={formStyles.input.base}
-                  placeholder="(81) 99999-9999"
-                  required
-                />
-              </div>
-            </div>
-
             {/* Special Requests */}
             <div className="space-y-2">
               <Label htmlFor="requests">Observações (opcional)</Label>
@@ -283,7 +326,7 @@ export function EventBookingForm({
             <Button
               type="submit"
               className={cn(buttonStyles.variant.default, "w-full")}
-              disabled={isEventPast}
+              disabled={isEventPast || !customerInfo.name || !customerInfo.email || !phoneInput.trim()}
             >
               {isEventPast ? (
                 "Evento já realizado"
@@ -309,20 +352,21 @@ export function EventBookingForm({
         <DialogContent className="w-full max-w-md">
           <DialogTitle>Pagamento do Ingresso</DialogTitle>
           <DialogDescription>Complete o pagamento para confirmar sua compra.</DialogDescription>
-          <StripeProvider>
-            <BookingPaymentForm 
-              amountCents={totalPrice * 100}
-              bookingType="event"
-              bookingData={{
-                eventId,
-                ticketId: selectedTicketId,
-                quantity,
-                customerInfo,
-                specialRequests: specialRequests || undefined,
-              }}
-              onSuccess={handlePaymentSuccess}
-            />
-          </StripeProvider>
+          <PaymentWrapper 
+            amountCents={totalPrice * 100}
+            bookingType="event"
+            bookingData={{
+              eventId,
+              ticketId: selectedTicketId,
+              quantity,
+              customerInfo: {
+                ...customerInfo,
+                phone: phoneInput,
+              },
+              specialRequests: specialRequests || undefined,
+            }}
+            onSuccess={handlePaymentSuccess}
+          />
         </DialogContent>
       </Dialog>
     </>

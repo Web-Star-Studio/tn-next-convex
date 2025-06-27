@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { stripe } from "@/lib/stripe";
+import Stripe from "stripe";
 
-export const runtime = "nodejs";
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2025-05-28.basil",
+});
 
 // Expected payload: { 
 //   amount: number; 
 //   currency?: string; 
 //   customerId?: string; 
-//   bookingType: "activity" | "event" | "vehicle" | "accommodation" | "package";
+//   bookingType: "activity" | "event" | "vehicle" | "accommodation" | "restaurant";
 //   bookingData: any;
 //   metadata?: any 
 // }
@@ -36,22 +38,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create Payment Intent with booking metadata
+    // Create Payment Intent with MANUAL CAPTURE for reservation system
     const intent = await stripe.paymentIntents.create({
       amount,
       currency,
       customer: customerId,
       automatic_payment_methods: { enabled: true },
+      capture_method: "manual", // 🔥 KEY CHANGE: Manual capture para autorizar sem capturar
       metadata: {
         // Core booking information for webhook processing
         bookingType,
         bookingData: JSON.stringify(bookingData),
+        flow: "reservation_system", // Identifier for webhook logic
         // Additional metadata
         ...metadata,
       },
     });
 
-    return NextResponse.json({ clientSecret: intent.client_secret });
+    console.log(`💳 PaymentIntent criado com captura manual: ${intent.id}`);
+
+    return NextResponse.json({ 
+      clientSecret: intent.client_secret,
+      paymentIntentId: intent.id,
+    });
   } catch (error: any) {
     console.error("Stripe PI Error", error);
     return NextResponse.json({ error: error.message }, { status: 500 });

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Calendar as CalendarIcon, Users, Clock, Plus, Minus, MapPin } from "lucide-react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "@/../convex/_generated/dataModel";
+import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -34,22 +35,22 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { cardStyles, buttonStyles, formStyles } from "@/lib/ui-config";
-import { StripeProvider } from "@/components/payments/StripeProvider";
-import BookingPaymentForm from "@/components/payments/BookingPaymentForm";
+import PaymentWrapper from "@/components/payments/PaymentWrapper";
 
 interface RestaurantReservationFormProps {
   restaurantId: Id<"restaurants">;
   restaurant: {
     name: string;
-    address: {
-      street: string;
-      neighborhood: string;
-      city: string;
+    address?: {
+      street?: string;
+      city?: string;
+      zipCode?: string;
     };
-    maximumPartySize: number;
-    acceptsReservations: boolean;
+    maxTableSize?: number;
+    minAdvanceReservation?: number;
+    maxAdvanceReservation?: number;
   };
-  onReservationSuccess?: (reservation: { confirmationCode: string }) => void;
+  onReservationSuccess?: (reservation: { confirmationCode: string; }) => void;
   className?: string;
 }
 
@@ -69,16 +70,20 @@ export function RestaurantReservationForm({
   onReservationSuccess,
   className,
 }: RestaurantReservationFormProps) {
-  const [date, setDate] = useState<Date | undefined>(undefined);
+  const [date, setDate] = useState<Date>();
   const [time, setTime] = useState<string>("");
-  const [partySize, setPartySize] = useState(2);
+  const [guests, setGuests] = useState(2);
   const [customerInfo, setCustomerInfo] = useState({
     name: "",
     email: "",
     phone: "",
   });
+  const [phoneInput, setPhoneInput] = useState(""); // Campo separado para telefone editável
   const [specialRequests, setSpecialRequests] = useState("");
   const [paymentOpen, setPaymentOpen] = useState(false);
+
+  // Get current user information
+  const { user, isLoading: userLoading } = useCurrentUser();
   
   // Gerar horários disponíveis entre 18h e 22h com intervalo de 30min
   const availableTimes = [
@@ -87,22 +92,44 @@ export function RestaurantReservationForm({
   ]
   
   const totalPrice = RESERVATION_FEE;
+
+  // Auto-fill customer info with user data
+  useEffect(() => {
+    if (user && !userLoading) {
+      setCustomerInfo({
+        name: user.name || "",
+        email: user.email || "",
+        phone: "",
+      });
+      setPhoneInput(""); // Campo sempre editável
+    }
+  }, [user, userLoading]);
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!date || !time) {
-      toast.error("Selecione data e horário");
+    if (!date) {
+      toast.error("Selecione uma data");
       return;
     }
 
-    if (!customerInfo.name || !customerInfo.email || !customerInfo.phone) {
-      toast.error("Preencha todas as informações de contato");
+    if (!time) {
+      toast.error("Selecione um horário");
       return;
     }
 
-    if (!restaurant.acceptsReservations) {
-      toast.error("Este restaurante não aceita reservas");
+    if (!user) {
+      toast.error("Você precisa estar logado para fazer uma reserva");
+      return;
+    }
+
+    if (!customerInfo.name || !customerInfo.email) {
+      toast.error("Informações do usuário incompletas. Verifique seu perfil.");
+      return;
+    }
+
+    if (!phoneInput.trim()) {
+      toast.error("Por favor, preencha seu telefone para continuar");
       return;
     }
 
@@ -121,8 +148,7 @@ export function RestaurantReservationForm({
     // Reset form
     setDate(undefined);
     setTime("");
-    setPartySize(2);
-    setCustomerInfo({ name: "", email: "", phone: "" });
+    setGuests(2);
     setSpecialRequests("");
     setPaymentOpen(false);
     
@@ -135,16 +161,48 @@ export function RestaurantReservationForm({
   };
 
   const incrementGuests = () => {
-    if (partySize < restaurant.maximumPartySize) {
-      setPartySize(partySize + 1);
+    const maxTableSize = restaurant.maxTableSize || 8;
+    if (guests < maxTableSize) {
+      setGuests(guests + 1);
     }
   };
 
   const decrementGuests = () => {
-    if (partySize > 1) {
-      setPartySize(partySize - 1);
+    if (guests > 1) {
+      setGuests(guests - 1);
     }
   };
+
+  if (userLoading) {
+    return (
+      <div className={cn("rounded-xl overflow-hidden bg-blue-50 shadow-sm border border-gray-100", className)}>
+        <div className="p-6">
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <span className="ml-3 text-gray-600">Carregando...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={cn("rounded-xl overflow-hidden bg-blue-50 shadow-sm border border-gray-100", className)}>
+        <div className="p-6">
+          <div className="text-center py-8">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Login necessário</h3>
+            <p className="text-gray-600 mb-4">Você precisa estar logado para fazer uma reserva.</p>
+            <Button onClick={() => window.location.href = '/sign-in'}>
+              Fazer Login
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const maxGuests = restaurant.maxTableSize || 8;
 
   return (
     <>
@@ -153,6 +211,39 @@ export function RestaurantReservationForm({
           <div>
             <h3 className="text-xl font-bold text-gray-900">Faça sua reserva</h3>
             <p className="text-sm text-gray-500 mt-1">Garanta seu lugar em {restaurant.name}</p>
+          </div>
+
+          {/* User info display */}
+          <div className="bg-blue-50 p-4 rounded-md">
+            <h4 className="font-semibold text-gray-900 mb-2">Informações da reserva:</h4>
+            <div className="space-y-3 text-sm text-gray-700">
+              <div>
+                <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
+                <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
+              </div>
+              
+              {/* Campo editável para telefone */}
+              <div className="space-y-1">
+                <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
+                  Telefone para contato *
+                </Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="(11) 99999-9999"
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  className="bg-white border-gray-300 text-sm"
+                  required
+                />
+              </div>
+            </div>
+            
+            {(!customerInfo.name || !customerInfo.email) && (
+              <p className="text-amber-600 text-xs mt-2">
+                ⚠️ Complete suas informações no perfil para fazer reservas
+              </p>
+            )}
           </div>
           
           {/* Data picker */}
@@ -237,66 +328,24 @@ export function RestaurantReservationForm({
                   size="icon" 
                   className="h-8 w-8 rounded-full border-gray-200"
                   onClick={decrementGuests}
-                  disabled={partySize <= 1}
+                  disabled={guests <= 1}
                 >
                   <Minus className="h-4 w-4" />
                   <span className="sr-only">Diminuir</span>
                 </Button>
-                <span className="w-5 text-center font-medium">{partySize}</span>
+                <span className="w-5 text-center font-medium">{guests}</span>
                 <Button
                   type="button"
                   variant="outline" 
                   size="icon" 
                   className="h-8 w-8 rounded-full border-gray-200"
                   onClick={incrementGuests}
-                  disabled={partySize >= restaurant.maximumPartySize}
+                  disabled={guests >= maxGuests}
                 >
                   <Plus className="h-4 w-4" />
                   <span className="sr-only">Aumentar</span>
                 </Button>
               </div>
-            </div>
-          </div>
-
-          {/* Customer Information */}
-          <div className="space-y-4 pt-4 border-t">
-            <h4 className="font-semibold text-gray-900">Informações de contato</h4>
-            
-            <div className="space-y-2">
-              <Label htmlFor="name">Nome completo</Label>
-              <Input
-                id="name"
-                type="text"
-                value={customerInfo.name}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                className="bg-white border-gray-200"
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={customerInfo.email}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
-                className="bg-white border-gray-200"
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="phone">Telefone</Label>
-              <Input
-                id="phone"
-                type="tel"
-                value={customerInfo.phone}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-                className="bg-white border-gray-200"
-                placeholder="(81) 99999-9999"
-                required
-              />
             </div>
           </div>
 
@@ -330,7 +379,7 @@ export function RestaurantReservationForm({
           <Button 
             type="submit"
             className="w-full bg-blue-600 hover:bg-blue-700 text-white h-12 font-medium"
-            disabled={!date || !time}
+            disabled={!date || !time || !customerInfo.name || !customerInfo.email || !phoneInput.trim()}
           >
             Confirmar reserva
           </Button>
@@ -342,21 +391,19 @@ export function RestaurantReservationForm({
         <DialogContent className="w-full max-w-md">
           <DialogTitle>Pagamento da Reserva</DialogTitle>
           <DialogDescription>Complete o pagamento para confirmar sua reserva.</DialogDescription>
-          <StripeProvider>
-            <BookingPaymentForm 
-              amountCents={totalPrice * 100}
-              bookingType="restaurant"
-              bookingData={{
-                restaurantId,
-                date: date ? format(date, "yyyy-MM-dd") : "",
-                time,
-                partySize,
-                customerInfo,
-                specialRequests: specialRequests || undefined,
-              }}
-              onSuccess={handlePaymentSuccess}
-            />
-          </StripeProvider>
+          <PaymentWrapper 
+            amountCents={totalPrice * 100}
+            bookingType="restaurant"
+            bookingData={{
+              restaurantId,
+              date: date ? format(date, "yyyy-MM-dd") : "",
+              time,
+              guests,
+              customerInfo,
+              specialRequests: specialRequests || undefined,
+            }}
+            onSuccess={handlePaymentSuccess}
+          />
         </DialogContent>
       </Dialog>
     </>

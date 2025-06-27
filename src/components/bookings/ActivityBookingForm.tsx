@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Calendar as CalendarIcon, Users, Clock, Ticket, MessageCircle } from "lucide-react";
@@ -8,6 +8,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "@/../convex/_generated/dataModel";
 import { useWhatsAppLink } from "@/lib/hooks/useSystemSettings";
+import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -35,8 +36,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { cardStyles, buttonStyles, formStyles } from "@/lib/ui-config";
-import { StripeProvider } from "@/components/payments/StripeProvider";
-import BookingPaymentForm from "@/components/payments/BookingPaymentForm";
+import PaymentWrapper from "@/components/payments/PaymentWrapper";
 
 interface ActivityBookingFormProps {
   activityId: Id<"activities">;
@@ -73,8 +73,12 @@ export function ActivityBookingForm({
     email: "",
     phone: "",
   });
+  const [phoneInput, setPhoneInput] = useState("");
   const [specialRequests, setSpecialRequests] = useState("");
   const [paymentOpen, setPaymentOpen] = useState(false);
+
+  // Get current user information
+  const { user, isLoading: userLoading } = useCurrentUser();
 
   // Get activity tickets if available
   const tickets = useQuery(api.domains.activities.queries.getActivityTickets, {
@@ -83,6 +87,18 @@ export function ActivityBookingForm({
 
   // Get WhatsApp link generator
   const { generateWhatsAppLink } = useWhatsAppLink();
+
+  // Auto-fill customer info with user data
+  useEffect(() => {
+    if (user && !userLoading) {
+      setCustomerInfo({
+        name: user.name || "",
+        email: user.email || "",
+        phone: "",
+      });
+      setPhoneInput(""); // Campo sempre editável
+    }
+  }, [user, userLoading]);
 
   // Available times (customize based on activity)
   const availableTimes = [
@@ -109,8 +125,18 @@ export function ActivityBookingForm({
       return;
     }
 
-    if (!customerInfo.name || !customerInfo.email || !customerInfo.phone) {
-      toast.error("Preencha todas as informações de contato");
+    if (!user) {
+      toast.error("Você precisa estar logado para fazer uma reserva");
+      return;
+    }
+
+    if (!customerInfo.name || !customerInfo.email) {
+      toast.error("Informações do usuário incompletas. Verifique seu perfil.");
+      return;
+    }
+
+    if (!phoneInput.trim()) {
+      toast.error("Por favor, preencha seu telefone para continuar");
       return;
     }
 
@@ -131,7 +157,6 @@ export function ActivityBookingForm({
     setTime("");
     setParticipants(activity.minParticipants);
     setSelectedTicketId(undefined);
-    setCustomerInfo({ name: "", email: "", phone: "" });
     setSpecialRequests("");
     setPaymentOpen(false);
     
@@ -143,6 +168,35 @@ export function ActivityBookingForm({
     }, 2000);
   };
 
+  if (userLoading) {
+    return (
+      <div className={cn(cardStyles.base, className)}>
+        <div className={cardStyles.content.default}>
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <span className="ml-3 text-gray-600">Carregando...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={cn(cardStyles.base, className)}>
+        <div className={cardStyles.content.default}>
+          <div className="text-center py-8">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Login necessário</h3>
+            <p className="text-gray-600 mb-4">Você precisa estar logado para fazer uma reserva.</p>
+            <Button onClick={() => window.location.href = '/sign-in'}>
+              Fazer Login
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className={cn(cardStyles.base, cardStyles.hover.default, className)}>
@@ -151,6 +205,38 @@ export function ActivityBookingForm({
             <div>
               <h3 className="text-xl font-bold text-gray-900">Reserve sua atividade</h3>
               <p className="text-sm text-gray-500 mt-1">{activity.title}</p>
+            </div>
+
+            {/* User info display */}
+            <div className="bg-blue-50 p-4 rounded-md">
+              <h4 className="font-semibold text-gray-900 mb-2">Informações da reserva:</h4>
+              <div className="space-y-3 text-sm text-gray-700">
+                <div>
+                  <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
+                  <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
+                </div>
+                
+                <div className="space-y-1">
+                  <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
+                    Telefone para contato *
+                  </Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    placeholder="(11) 99999-9999"
+                    value={phoneInput}
+                    onChange={(e) => setPhoneInput(e.target.value)}
+                    className="bg-white border-gray-300 text-sm"
+                    required
+                  />
+                </div>
+              </div>
+              
+              {(!customerInfo.name || !customerInfo.email) && (
+                <p className="text-amber-600 text-xs mt-2">
+                  ⚠️ Complete suas informações no perfil para fazer reservas
+                </p>
+              )}
             </div>
 
             {/* Date selection */}
@@ -255,48 +341,6 @@ export function ActivityBookingForm({
               </p>
             </div>
 
-            {/* Customer Information */}
-            <div className="space-y-4 pt-4 border-t">
-              <h4 className="font-semibold text-gray-900">Informações de contato</h4>
-              
-              <div className="space-y-2">
-                <Label htmlFor="name">Nome completo</Label>
-                <Input
-                  id="name"
-                  type="text"
-                  value={customerInfo.name}
-                  onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                  className={formStyles.input.base}
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={customerInfo.email}
-                  onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
-                  className={formStyles.input.base}
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="phone">Telefone</Label>
-                <Input
-                  id="phone"
-                  type="tel"
-                  value={customerInfo.phone}
-                  onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-                  className={formStyles.input.base}
-                  placeholder="(81) 99999-9999"
-                  required
-                />
-              </div>
-            </div>
-
             {/* Special Requests */}
             <div className="space-y-2">
               <Label htmlFor="requests">Solicitações especiais (opcional)</Label>
@@ -327,7 +371,7 @@ export function ActivityBookingForm({
             <Button
               type="submit"
               className={cn(buttonStyles.variant.default, "w-full")}
-              disabled={!date}
+              disabled={!date || !customerInfo.name || !customerInfo.email || !phoneInput.trim()}
             >
               Reservar atividade
             </Button>
@@ -340,22 +384,23 @@ export function ActivityBookingForm({
         <DialogContent className="w-full max-w-md">
           <DialogTitle>Pagamento da Atividade</DialogTitle>
           <DialogDescription>Complete o pagamento para confirmar sua reserva.</DialogDescription>
-          <StripeProvider>
-            <BookingPaymentForm 
-              amountCents={totalPrice * 100}
-              bookingType="activity"
-              bookingData={{
-                activityId,
-                ticketId: selectedTicketId,
-                date: date ? format(date, "yyyy-MM-dd") : "",
-                time: time || undefined,
-                participants,
-                customerInfo,
-                specialRequests: specialRequests || undefined,
-              }}
-              onSuccess={handlePaymentSuccess}
-            />
-          </StripeProvider>
+          <PaymentWrapper 
+            amountCents={totalPrice * 100}
+            bookingType="activity"
+            bookingData={{
+              activityId,
+              ticketId: selectedTicketId,
+              date: date ? format(date, "yyyy-MM-dd") : "",
+              time: time || undefined,
+              participants,
+              customerInfo: {
+                ...customerInfo,
+                phone: phoneInput,
+              },
+              specialRequests: specialRequests || undefined,
+            }}
+            onSuccess={handlePaymentSuccess}
+          />
         </DialogContent>
       </Dialog>
     </>

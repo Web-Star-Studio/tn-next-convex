@@ -69,4 +69,20 @@ crons.interval(
   {}
 );
 
+// Run every 4 hours to check for expiring authorizations
+crons.interval(
+  "cancel_expired_authorizations", 
+  { hours: 4 }, 
+  internal.domains.payments.crons.cancelExpiredAuthorizations,
+  {}
+);
+
+// TODO: Implement cleanup_old_bookings when needed
+// crons.cron(
+//   "cleanup_old_bookings",
+//   "0 2 * * *", // Every day at 2 AM
+//   internal.domains.bookings.crons.cleanupOldBookings,
+//   {}
+// );
+
 export default crons; 

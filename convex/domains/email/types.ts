@@ -6,6 +6,7 @@ import { Id } from "../../_generated/dataModel";
 export type EmailType = 
   | "booking_confirmation" 
   | "booking_cancelled"
+  | "booking_status_update"  // ✅ Novo tipo adicionado
   | "booking_reminder"
   | "package_request_received"
   | "package_request_status_update"
@@ -48,6 +49,17 @@ export interface BookingCancelledEmailData extends BaseEmailData {
   bookingType: "activity" | "event" | "restaurant" | "vehicle" | "accommodation";
   confirmationCode: string;
   reason?: string;
+  refundAmount?: number;
+}
+
+export interface BookingStatusUpdateEmailData extends BaseEmailData {
+  type: "booking_status_update";
+  customerName: string;
+  assetName: string;
+  bookingType: "activity" | "event" | "restaurant" | "vehicle" | "accommodation";
+  confirmationCode: string;
+  newStatus: string;
+  statusMessage: string;
   refundAmount?: number;
 }
 
@@ -124,6 +136,7 @@ export interface SupportMessageEmailData extends BaseEmailData {
 export type EmailData = 
   | BookingConfirmationEmailData
   | BookingCancelledEmailData
+  | BookingStatusUpdateEmailData  // ✅ Novo tipo adicionado
   | PackageRequestReceivedEmailData
   | PackageRequestStatusUpdateEmailData
   | PartnerNewBookingEmailData

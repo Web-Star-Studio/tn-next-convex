@@ -510,4 +510,78 @@ export const testEmailService = action({
       };
     }
   },
+});
+
+/**
+ * Enviar email de atualização de status de reserva
+ */
+export const sendBookingStatusUpdateEmail = internalAction({
+  args: {
+    customerEmail: v.string(),
+    customerName: v.string(),
+    assetName: v.string(),
+    bookingType: v.union(
+      v.literal("activity"),
+      v.literal("event"), 
+      v.literal("restaurant"),
+      v.literal("vehicle"),
+      v.literal("accommodation")
+    ),
+    confirmationCode: v.string(),
+    newStatus: v.string(), // "confirmed", "cancelled"
+    message: v.string(),
+    refundAmount: v.optional(v.number()),
+  },
+  returns: v.object({
+    success: v.boolean(),
+    error: v.optional(v.string()),
+  }),
+  handler: async (ctx, args) => {
+    try {
+      const statusMap: Record<string, string> = {
+        confirmed: "Confirmada",
+        cancelled: "Cancelada",
+      };
+
+      const subject = `Reserva ${statusMap[args.newStatus] || "Atualizada"} - ${args.assetName} - Código: ${args.confirmationCode}`;
+
+      const emailData = {
+        type: "booking_status_update" as const,
+        to: args.customerEmail,
+        subject,
+        customerName: args.customerName,
+        assetName: args.assetName,
+        bookingType: args.bookingType,
+        confirmationCode: args.confirmationCode,
+        newStatus: args.newStatus,
+        statusMessage: args.message,
+        refundAmount: args.refundAmount,
+      };
+
+      const result = await sendQuickEmail(emailData);
+      
+      // Salvar log no banco de dados
+      if (result.id) {
+        await ctx.runMutation(internal.domains.email.mutations.logEmail, {
+          type: result.type,
+          to: result.to,
+          subject: result.subject,
+          status: result.status,
+          error: result.error,
+          sentAt: result.sentAt,
+        });
+      }
+
+      return {
+        success: result.status === "sent",
+        error: result.error,
+      };
+    } catch (error) {
+      console.error("Failed to send booking status update email:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  },
 }); 

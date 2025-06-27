@@ -31,7 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { RestaurantReservationForm as ImprovedRestaurantReservationForm } from "@/components/bookings/ImprovedRestaurantReservationForm";
+import { ImprovedRestaurantReservationForm } from "@/components/bookings/ImprovedRestaurantReservationForm";
 
 export default function RestaurantPage(props: { params: Promise<{ slug: string }> }) {
   const params = use(props.params);
@@ -316,10 +316,46 @@ export default function RestaurantPage(props: { params: Promise<{ slug: string }
                       restaurantId={(restaurant._id || restaurant.id) as Id<"restaurants">}
                       restaurant={{
                         name: restaurant.name,
-                        address: restaurant.address,
-                        maximumPartySize: restaurant.maximumPartySize,
-                        acceptsReservations: restaurant.acceptsReservations,
-                        hours: restaurant.hours
+                        cuisine: restaurant.cuisine || [],
+                        priceRange: restaurant.priceRange || "$$",
+                        rating: {
+                          overall: restaurant.rating?.overall || 0,
+                          totalReviews: restaurant.rating?.totalReviews || 0
+                        },
+                        address: {
+                          street: restaurant.address?.street || "",
+                          neighborhood: restaurant.address?.neighborhood || "",
+                          city: restaurant.address?.city || "",
+                          zipCode: restaurant.address?.zipCode || ""
+                        },
+                        contact: {
+                          phone: restaurant.phone || "",
+                          email: undefined
+                        },
+                        operatingHours: restaurant.hours ? Object.fromEntries(
+                          Object.entries(restaurant.hours).map(([day, hours]) => [
+                            day,
+                            Array.isArray(hours) && hours.length > 0 
+                              ? { open: hours[0].split('-')[0]?.trim() || "09:00", close: hours[0].split('-')[1]?.trim() || "22:00" }
+                              : { open: "09:00", close: "22:00" }
+                          ])
+                        ) : {},
+                        features: {
+                          hasReservation: restaurant.acceptsReservations ?? true,
+                          hasDelivery: restaurant.features?.includes("Delivery") ?? false,
+                          hasTakeout: restaurant.features?.includes("Takeout") ?? false,
+                          acceptsCreditCard: restaurant.paymentOptions?.includes("Cartão de Crédito") ?? true,
+                          hasWifi: restaurant.features?.includes("Wi-Fi") ?? false,
+                          hasParking: restaurant.features?.includes("Estacionamento") ?? false,
+                          isAccessible: restaurant.features?.includes("Acessível") ?? false,
+                          allowsPets: restaurant.features?.includes("Pet-friendly") ?? false,
+                          hasOutdoorSeating: restaurant.features?.includes("Área externa") ?? false,
+                          hasLiveMusic: restaurant.features?.includes("Música ao vivo") ?? false
+                        },
+                        capacity: {
+                          totalSeats: 50, // Default value
+                          maxTableSize: restaurant.maximumPartySize || 8
+                        }
                       }}
                       onReservationSuccess={(reservation) => {
                         console.log("Reservation submitted:", reservation);

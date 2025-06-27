@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { Calendar as CalendarIcon, Users, Clock, Plus, Minus, MapPin, Utensils, MessageCircle } from "lucide-react";
+import { Calendar as CalendarIcon, Users, Clock, Plus, Minus } from "lucide-react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "@/../convex/_generated/dataModel";
-import { useWhatsAppLink } from "@/lib/hooks/useSystemSettings";
+import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -28,82 +28,109 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { cardStyles, buttonStyles, formStyles, badgeStyles } from "@/lib/ui-config";
+import { cardStyles, buttonStyles, formStyles } from "@/lib/ui-config";
 
-interface RestaurantReservationFormProps {
+interface ImprovedRestaurantReservationFormProps {
   restaurantId: Id<"restaurants">;
   restaurant: {
     name: string;
+    cuisine: string[];
+    priceRange: string;
+    rating: {
+      overall: number;
+      totalReviews: number;
+    };
     address: {
       street: string;
       neighborhood: string;
       city: string;
+      zipCode: string;
     };
-    maximumPartySize: number;
-    acceptsReservations: boolean;
-    hours: {
-      [key: string]: string[];
+    contact: {
+      phone: string;
+      email?: string;
+    };
+    operatingHours: {
+      [key: string]: {
+        open: string;
+        close: string;
+      };
+    };
+    features: {
+      hasReservation: boolean;
+      hasDelivery: boolean;
+      hasTakeout: boolean;
+      acceptsCreditCard: boolean;
+      hasWifi: boolean;
+      hasParking: boolean;
+      isAccessible: boolean;
+      allowsPets: boolean;
+      hasOutdoorSeating: boolean;
+      hasLiveMusic: boolean;
+    };
+    capacity: {
+      totalSeats: number;
+      maxTableSize: number;
     };
   };
   onReservationSuccess?: (reservation: { confirmationCode: string }) => void;
   className?: string;
 }
 
-export function RestaurantReservationForm({
+export function ImprovedRestaurantReservationForm({
   restaurantId,
   restaurant,
   onReservationSuccess,
   className,
-}: RestaurantReservationFormProps) {
-  const [date, setDate] = useState<Date | undefined>(undefined);
+}: ImprovedRestaurantReservationFormProps) {
+  const [date, setDate] = useState<Date>();
   const [time, setTime] = useState<string>("");
-  const [partySize, setPartySize] = useState(2);
+  const [guests, setGuests] = useState(2);
   const [customerInfo, setCustomerInfo] = useState({
     name: "",
     email: "",
     phone: "",
   });
+  const [phoneInput, setPhoneInput] = useState(""); // Campo separado para telefone editável
   const [specialRequests, setSpecialRequests] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const createReservation = useMutation(api.domains.bookings.mutations.createRestaurantReservation);
-  
-  // Get WhatsApp link generator
-  const { generateWhatsAppLink } = useWhatsAppLink();
+  // Get current user information
+  const { user, isLoading: userLoading } = useCurrentUser();
 
-  // Get available times based on restaurant hours and selected date
+  // Auto-fill customer info with user data
+  useEffect(() => {
+    if (user && !userLoading) {
+      setCustomerInfo({
+        name: user.name || "",
+        email: user.email || "",
+        phone: "",
+      });
+      setPhoneInput(""); // Campo sempre editável
+    }
+  }, [user, userLoading]);
+
+  const createReservation = useMutation(api.domains.restaurants.mutations.createReservation);
+
+  // Generate available times based on operating hours
   const getAvailableTimes = () => {
     if (!date) return [];
-    
-    const dayName = format(date, "EEEE", { locale: ptBR });
-    const dayNameEn = {
-      "segunda-feira": "Monday",
-      "terça-feira": "Tuesday", 
-      "quarta-feira": "Wednesday",
-      "quinta-feira": "Thursday",
-      "sexta-feira": "Friday",
-      "sábado": "Saturday",
-      "domingo": "Sunday",
-    }[dayName] || "Monday";
 
-    const hours = restaurant.hours[dayNameEn] || [];
-    
-    if (hours.length === 0) {
-      return [];
-    }
+    const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const dayName = daysOfWeek[date.getDay()]; // Get day name
+    const todayKey = Object.keys(restaurant.operatingHours)[0]; // Fallback to first available day
+    const hours = restaurant.operatingHours[dayName] || restaurant.operatingHours[todayKey];
 
-    // Generate time slots based on restaurant hours
+    if (!hours) return [];
+
     const times: string[] = [];
-    hours.forEach(hourRange => {
-      const [start, end] = hourRange.split("-");
-      const startHour = parseInt(start.split(":")[0]);
-      const endHour = parseInt(end.split(":")[0]);
-      
-      for (let hour = startHour; hour < endHour; hour++) {
-        times.push(`${hour.toString().padStart(2, "0")}:00`);
-        times.push(`${hour.toString().padStart(2, "0")}:30`);
-      }
-    });
+    const openTime = parseInt(hours.open.split(':')[0]);
+    const closeTime = parseInt(hours.close.split(':')[0]);
+
+    for (let hour = openTime; hour < closeTime; hour++) {
+      times.push(`${hour.toString().padStart(2, '0')}:00`);
+      times.push(`${hour.toString().padStart(2, '0')}:30`);
+    }
 
     return times;
   };
@@ -113,107 +140,174 @@ export function RestaurantReservationForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!date || !time) {
-      toast.error("Selecione data e horário");
+    if (!date) {
+      toast.error("Selecione uma data");
       return;
     }
 
-    if (!customerInfo.name || !customerInfo.email || !customerInfo.phone) {
-      toast.error("Preencha todas as informações de contato");
+    if (!time) {
+      toast.error("Selecione um horário");
       return;
     }
 
-    if (!restaurant.acceptsReservations) {
+    if (!user) {
+      toast.error("Você precisa estar logado para fazer uma reserva");
+      return;
+    }
+
+    if (!customerInfo.name || !customerInfo.email) {
+      toast.error("Informações do usuário incompletas. Verifique seu perfil.");
+      return;
+    }
+
+    if (!phoneInput.trim()) {
+      toast.error("Por favor, preencha seu telefone para continuar");
+      return;
+    }
+
+    if (!restaurant.features.hasReservation) {
       toast.error("Este restaurante não aceita reservas");
-      return;
-    }
-
-    if (availableTimes.length === 0) {
-      toast.error("Restaurante fechado nesta data");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      const result = await createReservation({
+      const reservationData = {
         restaurantId,
         date: format(date, "yyyy-MM-dd"),
         time,
-        partySize,
-        customerInfo,
+        guests,
+        customerInfo: {
+          ...customerInfo,
+          phone: phoneInput, // Usa o telefone do campo editável
+        },
         specialRequests: specialRequests || undefined,
-      });
+      };
+
+      const reservation = await createReservation(reservationData);
 
       toast.success("Reserva realizada com sucesso!", {
-        description: `Código de confirmação: ${result.confirmationCode}`,
+        description: `Código de confirmação: ${reservation.confirmationCode}`,
       });
-
-      if (onReservationSuccess) {
-        onReservationSuccess(result);
-      }
 
       // Reset form
       setDate(undefined);
       setTime("");
-      setPartySize(2);
-      setCustomerInfo({ name: "", email: "", phone: "" });
+      setGuests(2);
       setSpecialRequests("");
+      setPhoneInput("");
+
+      onReservationSuccess?.(reservation);
     } catch (error) {
-      toast.error("Erro ao fazer reserva", {
-        description: error instanceof Error ? error.message : "Tente novamente",
+      console.error("Erro ao criar reserva:", error);
+      toast.error("Erro ao realizar reserva", {
+        description: "Tente novamente ou entre em contato conosco.",
       });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const incrementGuests = () => {
-    if (partySize < restaurant.maximumPartySize) {
-      setPartySize(partySize + 1);
-    }
-  };
+  if (userLoading) {
+    return (
+      <div className={cn(cardStyles.base, className)}>
+        <div className={cardStyles.content.default}>
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <span className="ml-3 text-gray-600">Carregando...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  const decrementGuests = () => {
-    if (partySize > 1) {
-      setPartySize(partySize - 1);
-    }
-  };
+  if (!user) {
+    return (
+      <div className={cn(cardStyles.base, className)}>
+        <div className={cardStyles.content.default}>
+          <div className="text-center py-8">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Login necessário</h3>
+            <p className="text-gray-600 mb-4">Você precisa estar logado para fazer uma reserva.</p>
+            <Button onClick={() => window.location.href = '/sign-in'}>
+              Fazer Login
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  const isRestaurantClosed = date && availableTimes.length === 0;
+  if (!restaurant.features.hasReservation) {
+    return (
+      <div className={cn(cardStyles.base, className)}>
+        <div className={cardStyles.content.default}>
+          <div className="text-center py-8">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Reservas não disponíveis</h3>
+            <p className="text-gray-600 mb-4">Este restaurante não aceita reservas no momento.</p>
+            <p className="text-sm text-gray-500">
+              Entre em contato diretamente: {restaurant.contact.phone}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cn(cardStyles.base, cardStyles.hover.default, className)}>
       <form onSubmit={handleSubmit} className={cardStyles.content.default}>
         <div className="space-y-4">
           <div>
-            <h3 className="text-xl font-bold text-gray-900 flex items-center">
-              <Utensils className="mr-2 h-5 w-5 text-blue-600" />
-              Faça sua reserva
-            </h3>
+            <h3 className="text-xl font-bold text-gray-900">Reserve sua mesa</h3>
             <p className="text-sm text-gray-500 mt-1">{restaurant.name}</p>
-            <div className="flex items-center text-xs text-gray-500 mt-1">
-              <MapPin className="mr-1 h-3 w-3" />
-              {restaurant.address.neighborhood}, {restaurant.address.city}
+            <div className="flex items-center justify-between text-xs text-gray-400 mt-1">
+              <span>{restaurant.cuisine.join(", ")}</span>
+              <span>{restaurant.priceRange}</span>
             </div>
           </div>
 
-          {!restaurant.acceptsReservations && (
-            <div className={cn(badgeStyles.base, badgeStyles.variant.warning, "w-full justify-center")}>
-              Este restaurante não aceita reservas
+          {/* User info display */}
+          <div className="bg-blue-50 p-4 rounded-md">
+            <h4 className="font-semibold text-gray-900 mb-2">Informações da reserva:</h4>
+            <div className="space-y-3 text-sm text-gray-700">
+              <div>
+                <p><strong>Nome:</strong> {customerInfo.name || "Não informado"}</p>
+                <p><strong>Email:</strong> {customerInfo.email || "Não informado"}</p>
+              </div>
+              
+              {/* Campo editável para telefone */}
+              <div className="space-y-1">
+                <Label htmlFor="phone" className="text-sm font-medium text-gray-900">
+                  Telefone para contato *
+                </Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="(11) 99999-9999"
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  className="bg-white border-gray-300 text-sm"
+                  required
+                />
+              </div>
             </div>
-          )}
+            
+            {(!customerInfo.name || !customerInfo.email) && (
+              <p className="text-amber-600 text-xs mt-2">
+                ⚠️ Complete suas informações no perfil para fazer reservas
+              </p>
+            )}
+          </div>
 
-          {/* Date Selection */}
+          {/* Date selection */}
           <div className="space-y-2">
-            <Label htmlFor="date">Data da reserva</Label>
+            <Label>Data da reserva</Label>
             <Popover>
               <PopoverTrigger asChild>
                 <Button
-                  type="button"
                   variant="outline"
                   className={cn(
-                    formStyles.input.base,
                     "w-full justify-start text-left font-normal",
                     !date && "text-muted-foreground"
                   )}
@@ -222,113 +316,73 @@ export function RestaurantReservationForm({
                   {date ? format(date, "PPP", { locale: ptBR }) : "Selecione uma data"}
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-auto p-0">
+              <PopoverContent className="w-auto p-0" align="start">
                 <Calendar
                   mode="single"
                   selected={date}
                   onSelect={setDate}
-                  initialFocus
                   disabled={(date) => date < new Date()}
-                  locale={ptBR}
+                  initialFocus
                 />
               </PopoverContent>
             </Popover>
           </div>
 
-          {/* Time Selection */}
+          {/* Time selection */}
           <div className="space-y-2">
             <Label>Horário</Label>
-            {isRestaurantClosed ? (
-              <div className={cn(badgeStyles.base, badgeStyles.variant.danger, "w-full justify-center")}>
-                Restaurante fechado neste dia
-              </div>
-            ) : (
-              <Select value={time} onValueChange={setTime} disabled={!date || availableTimes.length === 0}>
-                <SelectTrigger className={formStyles.select.base}>
-                  <SelectValue placeholder="Selecione um horário" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableTimes.map((timeOption) => (
+            <Select value={time} onValueChange={setTime}>
+              <SelectTrigger className={formStyles.select.base}>
+                <SelectValue placeholder="Selecione um horário" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableTimes.length > 0 ? (
+                  availableTimes.map((timeOption) => (
                     <SelectItem key={timeOption} value={timeOption}>
-                      {timeOption}
+                      <div className="flex items-center">
+                        <Clock className="h-4 w-4 mr-2" />
+                        {timeOption}
+                      </div>
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+                  ))
+                ) : (
+                  <SelectItem value="" disabled>
+                    Nenhum horário disponível para esta data
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
           </div>
 
-          {/* Party Size */}
+          {/* Number of guests */}
           <div className="space-y-2">
-            <Label htmlFor="partySize">Número de pessoas</Label>
+            <Label htmlFor="guests">Número de pessoas</Label>
             <div className="flex items-center space-x-3">
               <Button
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={decrementGuests}
-                disabled={partySize <= 1}
+                onClick={() => setGuests(Math.max(1, guests - 1))}
+                disabled={guests <= 1}
               >
                 <Minus className="h-4 w-4" />
               </Button>
               <div className="flex items-center justify-center w-12 h-10 border rounded-md">
-                <span className="text-sm font-medium">{partySize}</span>
+                <span className="text-sm font-medium">{guests}</span>
               </div>
               <Button
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={incrementGuests}
-                disabled={partySize >= restaurant.maximumPartySize}
+                onClick={() => setGuests(Math.min(restaurant.capacity.maxTableSize, guests + 1))}
+                disabled={guests >= restaurant.capacity.maxTableSize}
               >
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
             <p className="text-xs text-gray-500">
-              Máximo {restaurant.maximumPartySize} pessoas
+              Máximo: {restaurant.capacity.maxTableSize} pessoas por mesa
             </p>
-          </div>
-
-          {/* Customer Information */}
-          <div className="space-y-4 pt-4 border-t">
-            <h4 className="font-semibold text-gray-900">Informações de contato</h4>
-            
-            <div className="space-y-2">
-              <Label htmlFor="name">Nome completo</Label>
-              <Input
-                id="name"
-                type="text"
-                value={customerInfo.name}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                className={formStyles.input.base}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={customerInfo.email}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
-                className={formStyles.input.base}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="phone">Telefone</Label>
-              <Input
-                id="phone"
-                type="tel"
-                value={customerInfo.phone}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-                className={formStyles.input.base}
-                placeholder="(81) 99999-9999"
-                required
-              />
-            </div>
           </div>
 
           {/* Special Requests */}
@@ -339,37 +393,18 @@ export function RestaurantReservationForm({
               value={specialRequests}
               onChange={(e) => setSpecialRequests(e.target.value)}
               className={formStyles.textarea.base}
-              placeholder="Aniversário, alergia alimentar, preferência de mesa..."
+              placeholder="Aniversário, dieta especial, localização preferida..."
             />
           </div>
-
-
 
           {/* Submit Button */}
           <Button
             type="submit"
             className={cn(buttonStyles.variant.default, "w-full")}
-            disabled={isSubmitting || !date || !time || !restaurant.acceptsReservations || isRestaurantClosed}
+            disabled={!date || !time || !customerInfo.name || !customerInfo.email || !phoneInput.trim() || isSubmitting}
           >
-            {isSubmitting ? (
-              "Processando..."
-            ) : !restaurant.acceptsReservations ? (
-              "Reservas não disponíveis"
-            ) : isRestaurantClosed ? (
-              "Fechado neste dia"
-            ) : (
-              <>
-                <Clock className="mr-2 h-4 w-4" />
-                Confirmar reserva
-              </>
-            )}
+            {isSubmitting ? "Reservando..." : "Confirmar reserva"}
           </Button>
-
-          {restaurant.acceptsReservations && (
-            <p className="text-xs text-center text-gray-500">
-              Você receberá uma confirmação por email em breve
-            </p>
-          )}
         </div>
       </form>
     </div>

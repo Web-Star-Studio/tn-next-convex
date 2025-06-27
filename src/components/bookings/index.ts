@@ -9,7 +9,7 @@
 export { ActivityBookingForm } from "./ActivityBookingForm";
 export { EventBookingForm } from "./EventBookingForm";
 export { RestaurantReservationForm } from "./RestaurantReservationForm";
-export { RestaurantReservationForm as ImprovedRestaurantReservationForm } from "./ImprovedRestaurantReservationForm";
+export { ImprovedRestaurantReservationForm } from "./ImprovedRestaurantReservationForm";
 export { VehicleBookingForm } from "./VehicleBookingForm";
 export { AccommodationBookingForm } from "./AccommodationBookingForm";
 

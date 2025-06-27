@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import Stripe from "stripe";
 import { ConvexHttpClient } from "convex/browser";
-import { api } from "../../../../../convex/_generated/api";
+import { api, internal } from "../../../../../convex/_generated/api";
 
 export const runtime = "nodejs";
 
@@ -19,34 +19,23 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  console.log("🔔 Webhook received at:", new Date().toISOString());
-  console.log("🔔 Request URL:", req.url);
-  console.log("🔔 Request method:", req.method);
-  
+  const body = await req.text();
   const sig = req.headers.get("stripe-signature");
+
   if (!sig) {
-    console.error("❌ Missing stripe-signature header");
     return NextResponse.json({ error: "Missing stripe-signature header" }, { status: 400 });
   }
 
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!webhookSecret) {
-    console.error("❌ STRIPE_WEBHOOK_SECRET not set");
-    return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
-  }
-
   let event: Stripe.Event;
-  const bodyText = await req.text();
 
   try {
-    event = stripe.webhooks.constructEvent(bodyText, sig, webhookSecret);
-    console.log("✅ Webhook signature verified successfully");
-    console.log("📋 Event type:", event.type);
-    console.log("📋 Event ID:", event.id);
+    event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
   } catch (err: any) {
-    console.error("❌ Webhook signature verification failed:", err.message);
-    return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
+    console.log(`❌ Webhook signature verification failed: ${err.message}`);
+    return NextResponse.json({ error: "Webhook signature verification failed" }, { status: 400 });
   }
+
+  console.log(`📥 Stripe Webhook: ${event.type}`);
 
   try {
     switch (event.type) {
@@ -55,15 +44,30 @@ export async function POST(req: NextRequest) {
         console.log("📝 PaymentIntent created:", intent.id);
         console.log("💰 Amount:", intent.amount, intent.currency);
         console.log("📊 Status:", intent.status);
-        // Just log the creation, no action needed
+        console.log("🔒 Capture method:", intent.capture_method);
+        break;
+      }
+      
+      case "payment_intent.requires_action": {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        console.log("🔐 PaymentIntent requires action:", intent.id);
+        // Customer needs to complete 3D Secure or similar authentication
+        break;
+      }
+
+      case "payment_intent.processing": {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        console.log("⏳ PaymentIntent processing:", intent.id);
         break;
       }
       
       case "payment_intent.succeeded": {
         const intent = event.data.object as Stripe.PaymentIntent;
         console.log("💰 PaymentIntent succeeded:", intent.id);
+        console.log("🔒 Capture method:", intent.capture_method);
+        console.log("💳 Status:", intent.status);
         
-        const { bookingType, bookingData } = intent.metadata;
+        const { bookingType, bookingData, flow } = intent.metadata;
         
         if (!bookingType || !bookingData) {
           console.error("Missing booking metadata in PaymentIntent:", intent.id);
@@ -73,10 +77,28 @@ export async function POST(req: NextRequest) {
         // Parse booking data
         const parsedBookingData = JSON.parse(bookingData);
         
-        // Create booking based on type
-        await createBookingAfterPayment(bookingType, parsedBookingData, intent.id);
+        if (flow === "reservation_system") {
+          if (intent.capture_method === "manual") {
+            // ✅ AUTHORIZED (not captured) - Create pending reservation
+            console.log(`🔄 Autorização bem-sucedida (manual capture): ${intent.id}`);
+            await createBookingAfterAuthorization(bookingType, parsedBookingData, intent.id);
+          } else {
+            // ✅ CAPTURED automatically - Create confirmed reservation (legacy flow)
+            console.log(`🔄 Pagamento capturado automaticamente: ${intent.id}`);
+            await createBookingAfterPayment(bookingType, parsedBookingData, intent.id);
+          }
+        } else {
+          // Legacy flow - maintain backward compatibility
+          await createBookingAfterPayment(bookingType, parsedBookingData, intent.id);
+        }
         
-        console.log(`✅ Booking created for PaymentIntent: ${intent.id}`);
+        console.log(`✅ Booking processed for PaymentIntent: ${intent.id}`);
+        break;
+      }
+
+      case "payment_intent.amount_capturable_updated": {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        console.log("📊 Amount capturable updated:", intent.id, "Capturable:", intent.amount_capturable);
         break;
       }
       
@@ -84,8 +106,12 @@ export async function POST(req: NextRequest) {
         const intent = event.data.object as Stripe.PaymentIntent;
         console.log("❌ PaymentIntent failed:", intent.id);
         
-        // Optional: Log failed payment attempt or send notification
-        // No booking is created on payment failure
+        // Optional: Update booking status to failed if it exists
+        const { bookingType, bookingData } = intent.metadata;
+        if (bookingType && bookingData) {
+          // Could implement booking failure handling here
+          console.log("💔 Payment failed for booking - no reservation created");
+        }
         break;
       }
       
@@ -93,30 +119,50 @@ export async function POST(req: NextRequest) {
         const intent = event.data.object as Stripe.PaymentIntent;
         console.log("🚫 PaymentIntent canceled:", intent.id);
         
-        // Optional: Log canceled payment attempt
-        // Could be useful for understanding user behavior
+        // Optional: Handle cancellation - could be partner canceling before confirmation
+        const { bookingType, bookingData } = intent.metadata;
+        if (bookingType && bookingData) {
+          console.log("🚫 Payment canceled - handling cancellation logic");
+        }
         break;
       }
-      
-      case "charge.dispute.created": {
-        const dispute = event.data.object as Stripe.Dispute;
-        console.log("⚠️ Chargeback/Dispute created:", dispute.id);
-        
-        // TODO: Notify administrators about dispute
-        // TODO: Mark related booking as disputed if found
-        // For now, just log the event
-        break;
-      }
-      
+
+      // Refund events
       case "refund.created": {
         const refund = event.data.object as Stripe.Refund;
         console.log("💸 Refund created:", refund.id);
+        console.log("💰 Amount:", refund.amount, refund.currency);
+        console.log("📊 Status:", refund.status);
         
-        // TODO: Update booking payment status to "refunded"
-        // TODO: Send refund confirmation email to customer
-        // For now, just log the event
+        // Update booking refund status if metadata available
+        const bookingId = refund.metadata?.bookingId;
+        const bookingType = refund.metadata?.bookingType;
+        if (bookingId && bookingType) {
+          console.log(`🔄 Updating refund status for booking ${bookingId}`);
+          // This will be called from the refund action, so we don't need to do it here
+        }
         break;
       }
+
+      case "refund.updated": {
+        const refund = event.data.object as Stripe.Refund;
+        console.log("💸 Refund updated:", refund.id, "Status:", refund.status);
+        
+        // Update final refund status
+        const bookingId = refund.metadata?.bookingId;
+        const bookingType = refund.metadata?.bookingType;
+        if (bookingId && bookingType && refund.status === "succeeded") {
+          await convex.mutation(api.domains.bookings.mutations.updateBookingRefundStatus, {
+            bookingId,
+            bookingType,
+            refundId: refund.id,
+            refundStatus: refund.status,
+          });
+        }
+        break;
+      }
+      
+
       
       default:
         console.log(`Unhandled event type ${event.type}`);
@@ -130,7 +176,77 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * Create booking after successful payment
+ * Create booking after successful authorization (manual capture)
+ * Status: "pending" - requires partner confirmation to capture payment
+ */
+async function createBookingAfterAuthorization(
+  bookingType: string, 
+  bookingData: any, 
+  paymentIntentId: string
+) {
+  try {
+    console.log(`🔄 Creating ${bookingType} booking after authorization:`, paymentIntentId);
+
+    switch (bookingType) {
+      case "activity":
+        await convex.mutation(api.domains.bookings.mutations.createActivityBookingWithPayment, {
+          activityId: bookingData.activityId,
+          userId: bookingData.userId,
+          ticketId: bookingData.ticketId || undefined,
+          date: bookingData.date,
+          time: bookingData.time,
+          participants: bookingData.participants,
+          paymentIntentId,
+          paymentCaptured: false, // Authorized but not captured
+          totalPrice: bookingData.totalPrice,
+          customerInfo: bookingData.customerInfo,
+          specialRequests: bookingData.specialRequests || undefined,
+        });
+        break;
+      
+      case "event":
+        await convex.mutation(api.domains.bookings.mutations.createEventBookingWithPayment, {
+          eventId: bookingData.eventId,
+          userId: bookingData.userId,
+          ticketId: bookingData.ticketId || undefined,
+          quantity: bookingData.quantity,
+          paymentIntentId,
+          paymentCaptured: false, // Authorized but not captured
+          totalPrice: bookingData.totalPrice,
+          customerInfo: bookingData.customerInfo,
+          specialRequests: bookingData.specialRequests || undefined,
+        });
+        break;
+      
+      case "vehicle":
+        // TODO: Create createVehicleBookingWithPayment mutation
+        console.warn("Vehicle booking with payment not implemented yet");
+        break;
+      
+      case "accommodation":
+        // TODO: Create createAccommodationBookingWithPayment mutation
+        console.warn("Accommodation booking with payment not implemented yet");
+        break;
+      
+      case "restaurant":
+        // TODO: Create createRestaurantReservationWithPayment mutation
+        console.warn("Restaurant reservation with payment not implemented yet");
+        break;
+      
+      default:
+        throw new Error(`Unknown booking type: ${bookingType}`);
+    }
+
+    console.log(`✅ ${bookingType} booking created successfully with payment authorization`);
+  } catch (error) {
+    console.error(`Failed to create ${bookingType} booking after authorization:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Create booking after successful payment (legacy flow - automatic capture)
+ * Status: "pending" - requires partner confirmation (legacy behavior)
  */
 async function createBookingAfterPayment(
   bookingType: string, 
@@ -140,13 +256,14 @@ async function createBookingAfterPayment(
   try {
     // Add payment information to booking data
     // Important: Booking status is "pending" - requires partner/employee confirmation
-    // Payment status is "paid" - payment was processed successfully
+    // Payment status is "paid" - payment was processed and captured successfully
     const bookingWithPayment = {
       ...bookingData,
       status: "pending", // ✅ Aguarda confirmação do partner/employee
-      paymentStatus: "paid", // ✅ Pagamento foi processado com sucesso
+      paymentStatus: "paid", // ✅ Pagamento foi processado e capturado com sucesso
       paymentMethod: "credit_card",
       paymentIntentId,
+      paymentCaptured: true, // ✅ Already captured
     };
 
     switch (bookingType) {

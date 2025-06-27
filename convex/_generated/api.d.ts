@@ -69,6 +69,9 @@ import type * as domains_packages_mutations from "../domains/packages/mutations.
 import type * as domains_packages_queries from "../domains/packages/queries.js";
 import type * as domains_packages_types from "../domains/packages/types.js";
 import type * as domains_packages_utils from "../domains/packages/utils.js";
+import type * as domains_payments_actions from "../domains/payments/actions.js";
+import type * as domains_payments_crons from "../domains/payments/crons.js";
+import type * as domains_payments_queries from "../domains/payments/queries.js";
 import type * as domains_rbac_action from "../domains/rbac/action.js";
 import type * as domains_rbac_functions from "../domains/rbac/functions.js";
 import type * as domains_rbac_index from "../domains/rbac/index.js";
@@ -186,6 +189,9 @@ declare const fullApi: ApiFromModules<{
   "domains/packages/queries": typeof domains_packages_queries;
   "domains/packages/types": typeof domains_packages_types;
   "domains/packages/utils": typeof domains_packages_utils;
+  "domains/payments/actions": typeof domains_payments_actions;
+  "domains/payments/crons": typeof domains_payments_crons;
+  "domains/payments/queries": typeof domains_payments_queries;
   "domains/rbac/action": typeof domains_rbac_action;
   "domains/rbac/functions": typeof domains_rbac_functions;
   "domains/rbac/index": typeof domains_rbac_index;

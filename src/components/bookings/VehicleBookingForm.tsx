@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format, addDays, differenceInDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Calendar as CalendarIcon, MessageCircle } from "lucide-react";
@@ -7,6 +7,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "@/../convex/_generated/dataModel";
 import { useWhatsAppLink } from "@/lib/hooks/useSystemSettings";
+import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -27,8 +28,7 @@ import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { StripeProvider } from "@/components/payments/StripeProvider";
-import BookingPaymentForm from "@/components/payments/BookingPaymentForm";
+import PaymentWrapper from "@/components/payments/PaymentWrapper";
 
 interface VehicleBookingFormProps {
   vehicleId: Id<"vehicles">;
@@ -57,11 +57,22 @@ export function VehicleBookingForm({ vehicleId, pricePerDay }: VehicleBookingFor
   const [pickupLocation, setPickupLocation] = useState("");
   const [notes, setNotes] = useState("");
 
-  // Get current user
-  const currentUser = useQuery(api.domains.users.queries.getCurrentUser);
+  // Get current user information
+  const { user, isLoading: userLoading } = useCurrentUser();
   
   // Get WhatsApp link generator
   const { generateWhatsAppLink } = useWhatsAppLink();
+
+  // Auto-fill customer info with user data
+  useEffect(() => {
+    if (user && !userLoading) {
+      setCustomerInfo({
+        name: user.name || "",
+        email: user.email || "",
+        phone: user.phone || "",
+      });
+    }
+  }, [user, userLoading]);
 
   // Calculate total days and price
   const totalDays = startDate && endDate ? differenceInDays(endDate, startDate) + 1 : 0;
@@ -75,10 +86,15 @@ export function VehicleBookingForm({ vehicleId, pricePerDay }: VehicleBookingFor
       return;
     }
 
+    if (!user) {
+      toast.error("Você precisa estar logado para fazer uma reserva");
+      return;
+    }
+
     // Validate customer info
     if (!customerInfo.name.trim() || !customerInfo.email.trim() || !customerInfo.phone.trim()) {
-      toast.error("Informações obrigatórias", {
-        description: "Por favor, preencha nome, email e telefone.",
+      toast.error("Informações do usuário incompletas", {
+        description: "Verifique suas informações no perfil.",
       });
       return;
     }
@@ -87,14 +103,7 @@ export function VehicleBookingForm({ vehicleId, pricePerDay }: VehicleBookingFor
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(customerInfo.email)) {
       toast.error("Email inválido", {
-        description: "Por favor, insira um email válido.",
-      });
-      return;
-    }
-
-    if (!currentUser) {
-      toast.error("Usuário não autenticado", {
-        description: "Por favor, faça login para realizar uma reserva.",
+        description: "Por favor, verifique seu email no perfil.",
       });
       return;
     }
@@ -114,7 +123,6 @@ export function VehicleBookingForm({ vehicleId, pricePerDay }: VehicleBookingFor
     // Reset form
     setStartDate(new Date());
     setEndDate(addDays(new Date(), 3));
-    setCustomerInfo({ name: "", email: "", phone: "" });
     setPickupLocation("");
     setNotes("");
     setPaymentOpen(false);
@@ -127,9 +135,49 @@ export function VehicleBookingForm({ vehicleId, pricePerDay }: VehicleBookingFor
     }, 2000);
   };
 
+  if (userLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-center py-8">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <span className="ml-3 text-gray-600">Carregando...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="space-y-4">
+        <div className="text-center py-8 bg-gray-50 rounded-lg">
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">Login necessário</h3>
+          <p className="text-gray-600 mb-4">Você precisa estar logado para fazer uma reserva.</p>
+          <Button onClick={() => window.location.href = '/sign-in'}>
+            Fazer Login
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="space-y-4">
+        {/* User info display */}
+        <div className="bg-blue-50 p-4 rounded-md border border-blue-200">
+          <h4 className="font-semibold text-gray-900 mb-2">Reserva para:</h4>
+          <div className="space-y-1 text-sm text-gray-700">
+            <p><strong>Nome:</strong> {customerInfo.name}</p>
+            <p><strong>Email:</strong> {customerInfo.email}</p>
+            <p><strong>Telefone:</strong> {customerInfo.phone || "Não informado"}</p>
+          </div>
+          {(!customerInfo.name || !customerInfo.email || !customerInfo.phone) && (
+            <p className="text-amber-600 text-xs mt-2">
+              ⚠️ Complete suas informações no perfil para fazer reservas
+            </p>
+          )}
+        </div>
+
         <div className="space-y-2">
           <Label htmlFor="pickup-date">Data de retirada</Label>
           <Popover>
@@ -194,46 +242,10 @@ export function VehicleBookingForm({ vehicleId, pricePerDay }: VehicleBookingFor
           </Popover>
         </div>
 
-        {/* Customer Information */}
+        {/* Additional booking details */}
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="font-medium text-lg">Informações do Solicitante</h3>
+          <h3 className="font-medium text-lg">Detalhes da Reserva</h3>
           
-          <div className="space-y-2">
-            <Label htmlFor="customer-name">Nome completo *</Label>
-            <Input
-              id="customer-name"
-              type="text"
-              placeholder="Seu nome completo"
-              value={customerInfo.name}
-              onChange={(e) => setCustomerInfo(prev => ({ ...prev, name: e.target.value }))}
-              required
-            />
-          </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="customer-email">Email *</Label>
-            <Input
-              id="customer-email"
-              type="email"
-              placeholder="seu@email.com"
-              value={customerInfo.email}
-              onChange={(e) => setCustomerInfo(prev => ({ ...prev, email: e.target.value }))}
-              required
-            />
-          </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="customer-phone">Telefone *</Label>
-            <Input
-              id="customer-phone"
-              type="tel"
-              placeholder="(11) 99999-9999"
-              value={customerInfo.phone}
-              onChange={(e) => setCustomerInfo(prev => ({ ...prev, phone: e.target.value }))}
-              required
-            />
-          </div>
-
           <div className="space-y-2">
             <Label htmlFor="pickup-location">Local de retirada (opcional)</Label>
             <Input
@@ -290,21 +302,19 @@ export function VehicleBookingForm({ vehicleId, pricePerDay }: VehicleBookingFor
         <DialogContent className="w-full max-w-md">
           <DialogTitle>Pagamento do Veículo</DialogTitle>
           <DialogDescription>Complete o pagamento para confirmar sua reserva.</DialogDescription>
-          <StripeProvider>
-            <BookingPaymentForm 
-              amountCents={totalPrice * 100}
-              bookingType="vehicle"
-              bookingData={{
-                vehicleId,
-                startDate: startDate?.getTime() || 0,
-                endDate: endDate?.getTime() || 0,
-                customerInfo,
-                pickupLocation: pickupLocation.trim() || undefined,
-                notes: notes.trim() || undefined,
-              }}
-              onSuccess={handlePaymentSuccess}
-            />
-          </StripeProvider>
+          <PaymentWrapper 
+            amountCents={totalPrice * 100}
+            bookingType="vehicle"
+            bookingData={{
+              vehicleId,
+              startDate: startDate?.getTime() || 0,
+              endDate: endDate?.getTime() || 0,
+              customerInfo,
+              pickupLocation: pickupLocation.trim() || undefined,
+              notes: notes.trim() || undefined,
+            }}
+            onSuccess={handlePaymentSuccess}
+          />
         </DialogContent>
       </Dialog>
 

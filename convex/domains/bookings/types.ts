@@ -12,6 +12,7 @@ export const BOOKING_STATUS = {
 // Payment status values
 export const PAYMENT_STATUS = {
   PENDING: "pending",
+  AUTHORIZED: "authorized",  // ✅ Adicionado para o novo fluxo
   PAID: "paid",
   REFUNDED: "refunded", 
   FAILED: "failed",
