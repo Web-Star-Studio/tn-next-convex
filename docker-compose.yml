@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  postgres_users: # Banco de dados para o serviço de usuários
+    image: postgres:15-alpine
+    container_name: tuca_postgres_users
+    environment:
+      POSTGRES_USER: ${DB_USERS_USERNAME:-tuca_user}
+      POSTGRES_PASSWORD: ${DB_USERS_PASSWORD:-tuca_password}
+      POSTGRES_DB: ${DB_USERS_DATABASE:-tuca_users_db}
+    ports:
+      - "${DB_USERS_PORT:-5432}:5432" # Mapeia a porta do host para a porta do container
+    volumes:
+      - postgres_users_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERS_USERNAME:-tuca_user} -d ${DB_USERS_DATABASE:-tuca_users_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres_activities: # Banco de dados para o serviço de catálogo de atividades
+    image: postgres:15-alpine
+    container_name: tuca_postgres_activities
+    environment:
+      POSTGRES_USER: ${DB_ACTIVITIES_USERNAME:-tuca_activity_user}
+      POSTGRES_PASSWORD: ${DB_ACTIVITIES_PASSWORD:-tuca_activity_password}
+      POSTGRES_DB: ${DB_ACTIVITIES_DATABASE:-tuca_activities_db}
+    ports:
+      - "${DB_ACTIVITIES_PORT:-5433}:5432" # Porta diferente no host para evitar conflito
+    volumes:
+      - postgres_activities_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_ACTIVITIES_USERNAME:-tuca_activity_user} -d ${DB_ACTIVITIES_DATABASE:-tuca_activities_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis_main: # Instância Redis para sessões, cache, etc.
+    image: redis:7-alpine
+    container_name: tuca_redis_main
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_main_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Futuramente, adicionaremos os serviços aqui:
+  # user_service:
+  #   build:
+  #     context: ./user-service # Caminho para o Dockerfile do user-service
+  #     dockerfile: Dockerfile.dev # Usar um Dockerfile específico para desenvolvimento se necessário
+  #   container_name: tuca_user_service
+  #   ports:
+  #     - "${USER_SERVICE_PORT:-3000}:3000"
+  #   environment:
+  #     NODE_ENV: development
+  #     DB_HOST: postgres_users # Nome do serviço postgres dentro da rede docker-compose
+  #     DB_PORT: 5432
+  #     DB_USERNAME: ${DB_USERS_USERNAME:-tuca_user}
+  #     DB_PASSWORD: ${DB_USERS_PASSWORD:-tuca_password}
+  #     DB_DATABASE: ${DB_USERS_DATABASE:-tuca_users_db}
+  #     REDIS_HOST: redis_main
+  #     REDIS_PORT: 6379
+  #     JWT_SECRET: your-dev-jwt-secret
+  #     JWT_EXPIRATION_TIME: 3600s
+  #     # ... outras env vars
+  #   volumes:
+  #     - ./user-service:/usr/src/app # Monta o código fonte para hot-reloading
+  #     - /usr/src/app/node_modules # Evita sobrescrever node_modules do container
+  #   depends_on:
+  #     postgres_users:
+  #       condition: service_healthy
+  #     redis_main:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+
+  # activity_catalog_service:
+  #   build:
+  #     context: ./activity-catalog-service
+  #     dockerfile: Dockerfile.dev
+  #   container_name: tuca_activity_catalog_service
+  #   ports:
+  #     - "${ACTIVITY_SERVICE_PORT:-3001}:3000" # Porta interna do container pode ser 3000
+  #   environment:
+  #     NODE_ENV: development
+  #     DB_HOST: postgres_activities
+  #     DB_PORT: 5432
+  #     DB_USERNAME: ${DB_ACTIVITIES_USERNAME:-tuca_activity_user}
+  #     DB_PASSWORD: ${DB_ACTIVITIES_PASSWORD:-tuca_activity_password}
+  #     DB_DATABASE: ${DB_ACTIVITIES_DATABASE:-tuca_activities_db}
+  #     USER_SERVICE_URL: http://user_service:3000 # Para comunicação interna
+  #     # ...
+  #   volumes:
+  #     - ./activity-catalog-service:/usr/src/app
+  #     - /usr/src/app/node_modules
+  #   depends_on:
+  #     postgres_activities:
+  #       condition: service_healthy
+  #     user_service: # Depende do user_service estar pronto
+  #       condition: service_started # Ou service_healthy se tiver healthcheck no user_service
+  #   restart: unless-stopped
+
+volumes:
+  postgres_users_data:
+  postgres_activities_data:
+  redis_main_data:
+
+networks:
+  default:
+    name: tuca_microservices_network
