@@ -46,175 +46,7 @@ export const createActivityBooking = mutation({
     totalPrice: v.number(),
   }),
   handler: async (ctx, args) => {
-    // Get current user
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Usuário não autenticado");
-    }
-
-    // Get user from database
-    const user = await ctx.db
-      .query("users")
-      .withIndex("clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-
-    if (!user) {
-      throw new Error("Usuário não encontrado");
-    }
-
-    // Check rate limit for booking creation
-    const rateLimitCheck = await checkRateLimit(ctx, user._id, "CREATE_BOOKING");
-    if (!rateLimitCheck.allowed) {
-      throw new Error(
-        "Limite de reservas excedido. " + rateLimitCheck.remainingAttempts + " tentativas restantes. " +
-        "Limite será resetado em " + new Date(rateLimitCheck.resetTime).toLocaleString()
-      );
-    }
-
-    // Definir informações do cliente usando dados do usuário caso não fornecidas
-    const customerInfo = args.customerInfo ?? {
-      name: user.name || identity.name || "",
-      email: user.email || identity.email || "",
-      phone: user.phoneNumber || "",
-    };
-
-    // Validar informações do cliente
-    if (!isValidEmail(customerInfo.email)) {
-      throw new Error("Email inválido");
-    }
-    if (!isValidPhone(customerInfo.phone)) {
-      throw new Error("Telefone inválido");
-    }
-
-    // Substituir args.customerInfo
-    args.customerInfo = customerInfo as any;
-
-    // Get activity
-    const activity = await ctx.db.get(args.activityId);
-    if (!activity) {
-      throw new Error("Atividade não encontrada");
-    }
-
-    // Check if activity is active
-    if (!activity.isActive) {
-      throw new Error("Atividade não está disponível");
-    }
-
-    // Check participant limits
-    if (args.participants < activity.minParticipants) {
-      throw new Error("Mínimo de " + activity.minParticipants + " participantes");
-    }
-    if (args.participants > activity.maxParticipants) {
-      throw new Error("Máximo de " + activity.maxParticipants + " participantes");
-    }
-
-    // Calculate price
-    let totalPrice = activity.price;
-    if (args.ticketId) {
-      const ticket = await ctx.db.get(args.ticketId);
-      if (!ticket || !ticket.isActive) {
-        throw new Error("Tipo de ingresso não disponível");
-      }
-      totalPrice = ticket.price;
-    }
-
-    const calculatedPrice = calculateActivityBookingPrice(totalPrice, args.participants);
-    // Use finalAmount if coupon is applied, otherwise use calculated price
-    const finalPrice = args.finalAmount ?? calculatedPrice;
-    const confirmationCode = generateConfirmationCode(args.date, customerInfo.name);
-
-    // Determine initial booking status based on payment requirement
-    let initialStatus: string = BOOKING_STATUS.DRAFT;
-    let initialPaymentStatus: string = PAYMENT_STATUS.PENDING;
-    
-    // Se a atividade não requer pagamento ou é gratuita
-    if (finalPrice === 0) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.NOT_REQUIRED;
-    }
-    // Se requer pagamento online
-    else if (activity.acceptsOnlinePayment && activity.requiresUpfrontPayment) {
-      initialStatus = BOOKING_STATUS.DRAFT;
-      initialPaymentStatus = PAYMENT_STATUS.PENDING;
-    }
-    // Se aceita pagamento no local
-    else if (!activity.requiresUpfrontPayment) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.PENDING;
-    }
-
-    // Create booking
-    const bookingId = await ctx.db.insert("activityBookings", {
-      activityId: args.activityId,
-      userId: user._id,
-      ticketId: args.ticketId,
-      date: args.date,
-      time: args.time,
-      participants: args.participants,
-      totalPrice: finalPrice,
-      status: initialStatus,
-      paymentStatus: initialPaymentStatus,
-      confirmationCode,
-      customerInfo,
-      specialRequests: args.specialRequests,
-      couponCode: args.couponCode,
-      discountAmount: args.discountAmount,
-      finalAmount: args.finalAmount,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-
-    // Record successful booking attempt for rate limiting
-    await recordRateLimitAttempt(ctx, user._id, "CREATE_BOOKING");
-
-    // Only send confirmation emails if payment is not required or not upfront
-    if (initialPaymentStatus === PAYMENT_STATUS.NOT_REQUIRED || !activity.requiresUpfrontPayment) {
-      // Send email confirmation to customer
-      await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
-        customerEmail: customerInfo.email,
-        customerName: customerInfo.name,
-        assetName: activity.title,
-        bookingType: "activity",
-        confirmationCode,
-        bookingDate: args.date,
-        totalPrice: finalPrice,
-        bookingDetails: {
-          activityId: activity._id,
-          participants: args.participants,
-          date: args.date,
-          specialRequests: args.specialRequests,
-        },
-      });
-
-      // Send notification to partner about new booking
-      const partner = await ctx.db.get(activity.partnerId);
-      if (partner && partner.email) {
-        await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendPartnerNewBookingEmail, {
-          partnerEmail: partner.email,
-          partnerName: partner.name || "Parceiro",
-          customerName: customerInfo.name,
-          customerEmail: customerInfo.email,
-          customerPhone: customerInfo.phone,
-          assetName: activity.title,
-          bookingType: "activity",
-          confirmationCode,
-          bookingDate: args.date,
-          totalPrice: finalPrice,
-          bookingDetails: {
-            activityId: activity._id,
-            participants: args.participants,
-            date: args.date,
-            specialRequests: args.specialRequests,
-          },
-        });
-      }
-    }
-
-    return {
-      bookingId,
-      confirmationCode,
-      totalPrice: finalPrice,
-    };
+    return await _createBooking(ctx, "activity", args);
   },
 });
 
@@ -229,153 +61,263 @@ export const createEventBooking = mutation({
     totalPrice: v.number(),
   }),
   handler: async (ctx, args) => {
-    // Get current user
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Usuário não autenticado");
-    }
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-
-    if (!user) {
-      throw new Error("Usuário não encontrado");
-    }
-
-    // Definir informações do cliente usando dados do usuário caso não fornecidas
-    const customerInfo = args.customerInfo ?? {
-      name: user.name || identity.name || "",
-      email: user.email || identity.email || "",
-      phone: user.phoneNumber || "",
-    };
-
-    // Validar informações do cliente
-    if (!isValidEmail(customerInfo.email)) {
-      throw new Error("Email inválido");
-    }
-    if (!isValidPhone(customerInfo.phone)) {
-      throw new Error("Telefone inválido");
-    }
-
-    // Substituir args.customerInfo por customerInfo consolidado
-    args.customerInfo = customerInfo as any;
-
-    // Get event
-    const event = await ctx.db.get(args.eventId);
-    if (!event) {
-      throw new Error("Evento não encontrado");
-    }
-
-    if (!event.isActive) {
-      throw new Error("Evento não está disponível");
-    }
-
-    // Calculate price
-    let totalPrice = event.price;
-    if (args.ticketId) {
-      const ticket = await ctx.db.get(args.ticketId);
-      if (!ticket || !ticket.isActive) {
-        throw new Error("Tipo de ingresso não disponível");
-      }
-      totalPrice = ticket.price;
-    }
-
-    const calculatedPrice = calculateEventBookingPrice(totalPrice, args.quantity);
-    // Use finalAmount if coupon is applied, otherwise use calculated price
-    const finalPrice = args.finalAmount ?? calculatedPrice;
-    const confirmationCode = generateConfirmationCode(event.date, customerInfo.name);
-
-    // Determine initial booking status based on payment requirement
-    let initialStatus: string = BOOKING_STATUS.DRAFT;
-    let initialPaymentStatus: string = PAYMENT_STATUS.PENDING;
-    
-    // Se o evento não requer pagamento ou é gratuito
-    if (finalPrice === 0) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.NOT_REQUIRED;
-    }
-    // Se requer pagamento online
-    else if (event.acceptsOnlinePayment && event.requiresUpfrontPayment) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.PENDING;
-    }
-    // Se aceita pagamento no local
-    else if (!event.requiresUpfrontPayment) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.PENDING;
-    }
-
-    // Create booking
-    const bookingId = await ctx.db.insert("eventBookings", {
-      eventId: args.eventId,
-      userId: user._id,
-      ticketId: args.ticketId,
-      quantity: args.quantity,
-      totalPrice: finalPrice,
-      status: initialStatus,
-      paymentStatus: initialPaymentStatus,
-      confirmationCode,
-      customerInfo,
-      specialRequests: args.specialRequests,
-      couponCode: args.couponCode,
-      discountAmount: args.discountAmount,
-      finalAmount: args.finalAmount,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-
-    // Only send confirmation emails if payment is not required or not upfront
-    if (initialPaymentStatus === PAYMENT_STATUS.NOT_REQUIRED || !event.requiresUpfrontPayment) {
-      // Send email confirmation to customer
-      await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
-        customerEmail: customerInfo.email,
-        customerName: customerInfo.name,
-        assetName: event.title,
-        bookingType: "event",
-        confirmationCode,
-        bookingDate: event.date,
-        totalPrice: finalPrice,
-        bookingDetails: {
-          eventId: event._id,
-          participants: args.quantity,
-          date: event.date,
-          specialRequests: args.specialRequests,
-        },
-      });
-
-      // Send notification to partner about new booking
-      const partner = await ctx.db.get(event.partnerId);
-      if (partner && partner.email) {
-        await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendPartnerNewBookingEmail, {
-          partnerEmail: partner.email,
-          partnerName: partner.name || "Parceiro",
-          customerName: customerInfo.name,
-          customerEmail: customerInfo.email,
-          customerPhone: customerInfo.phone,
-          assetName: event.title,
-          bookingType: "event",
-          confirmationCode,
-          bookingDate: event.date,
-          totalPrice: finalPrice,
-          bookingDetails: {
-            eventId: event._id,
-            participants: args.quantity,
-            date: event.date,
-            specialRequests: args.specialRequests,
-          },
-        });
-      }
-    }
-
-    return {
-      bookingId,
-      confirmationCode,
-      totalPrice: finalPrice,
-    };
+    return await _createBooking(ctx, "event", args);
   },
 });
+
+// Generic internal mutation for creating bookings
+async function _createBooking(
+  ctx: MutationCtx,
+  bookingType: "activity" | "event" | "restaurant" | "vehicle",
+  args: any
+) {
+  // Get current user
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) {
+    throw new Error("Usuário não autenticado");
+  }
+
+  // Get user from database
+  const user = await ctx.db
+    .query("users")
+    .withIndex("clerkId", (q) => q.eq("clerkId", identity.subject))
+    .unique();
+
+  if (!user) {
+    throw new Error("Usuário não encontrado");
+  }
+
+  // Rate limiting
+  const rateLimitCheck = await checkRateLimit(ctx, user._id, "CREATE_BOOKING");
+  if (!rateLimitCheck.allowed) {
+    throw new Error(
+      `Limite de reservas excedido. ${rateLimitCheck.remainingAttempts} tentativas restantes. Limite será resetado em ${new Date(rateLimitCheck.resetTime).toLocaleString()}`
+    );
+  }
+
+  // Consolidate and validate customer info
+  const customerInfo = args.customerInfo ?? {
+    name: user.name || identity.name || "",
+    email: user.email || identity.email || "",
+    phone: user.phoneNumber || "",
+  };
+  if (!isValidEmail(customerInfo.email)) throw new Error("Email inválido");
+  if (!isValidPhone(customerInfo.phone)) throw new Error("Telefone inválido");
+  args.customerInfo = customerInfo;
+
+  let asset: any;
+  let calculatedPrice: number;
+  let finalPrice: number;
+  let confirmationCode: string;
+  let initialStatus: string = BOOKING_STATUS.DRAFT;
+  let initialPaymentStatus: string = PAYMENT_STATUS.PENDING;
+  let bookingId: Id<any>;
+  let bookingData: any = {};
+  let emailDetails: any = {};
+
+  switch (bookingType) {
+    case "activity":
+      asset = await ctx.db.get(args.activityId);
+      if (!asset) throw new Error("Atividade não encontrada");
+      if (!asset.isActive) throw new Error("Atividade não está disponível");
+      if (args.participants < asset.minParticipants) throw new Error(`Mínimo de ${asset.minParticipants} participantes`);
+      if (args.participants > asset.maxParticipants) throw new Error(`Máximo de ${asset.maxParticipants} participantes`);
+
+      let ticketPrice = asset.price;
+      if (args.ticketId) {
+        const ticket = await ctx.db.get(args.ticketId);
+        if (!ticket || !ticket.isActive) throw new Error("Tipo de ingresso não disponível");
+        ticketPrice = ticket.price;
+      }
+      calculatedPrice = calculateActivityBookingPrice(ticketPrice, args.participants);
+      finalPrice = args.finalAmount ?? calculatedPrice;
+      confirmationCode = generateConfirmationCode(args.date, customerInfo.name);
+
+      bookingData = {
+        activityId: args.activityId,
+        ticketId: args.ticketId,
+        date: args.date,
+        time: args.time,
+        participants: args.participants,
+      };
+      emailDetails = {
+        activityId: asset._id,
+        participants: args.participants,
+        date: args.date,
+        specialRequests: args.specialRequests,
+      };
+      break;
+
+    case "event":
+      asset = await ctx.db.get(args.eventId);
+      if (!asset) throw new Error("Evento não encontrado");
+      if (!asset.isActive) throw new Error("Evento não está disponível");
+
+      let eventTicketPrice = asset.price;
+      if (args.ticketId) {
+        const ticket = await ctx.db.get(args.ticketId);
+        if (!ticket || !ticket.isActive) throw new Error("Tipo de ingresso não disponível");
+        eventTicketPrice = ticket.price;
+      }
+      calculatedPrice = calculateEventBookingPrice(eventTicketPrice, args.quantity);
+      finalPrice = args.finalAmount ?? calculatedPrice;
+      confirmationCode = generateConfirmationCode(asset.date, customerInfo.name);
+
+      bookingData = {
+        eventId: args.eventId,
+        ticketId: args.ticketId,
+        quantity: args.quantity,
+      };
+      emailDetails = {
+        eventId: asset._id,
+        participants: args.quantity,
+        date: asset.date,
+        specialRequests: args.specialRequests,
+      };
+      break;
+
+    case "restaurant":
+      asset = await ctx.db.get(args.restaurantId);
+      if (!asset) throw new Error("Restaurante não encontrado");
+      if (!asset.isActive) throw new Error("Restaurante não está disponível");
+      if (!asset.acceptsReservations) throw new Error("Restaurante não aceita reservas");
+      if (args.partySize > asset.maximumPartySize) throw new Error(`Máximo de ${asset.maximumPartySize} pessoas por reserva`);
+
+      finalPrice = args.finalAmount || asset.price || 0;
+      confirmationCode = generateConfirmationCode(args.date, customerInfo.name);
+
+      bookingData = {
+        restaurantId: args.restaurantId,
+        date: args.date,
+        time: args.time,
+        partySize: args.partySize,
+        name: customerInfo.name,
+        email: customerInfo.email,
+        phone: customerInfo.phone,
+      };
+      emailDetails = {
+        restaurantId: asset._id,
+        partySize: args.partySize,
+        date: args.date,
+        time: args.time,
+        specialRequests: args.specialRequests,
+      };
+      break;
+
+    case "vehicle":
+      asset = await ctx.db.get(args.vehicleId);
+      if (!asset) throw new Error("Veículo não encontrado");
+      if (asset.status !== "available") throw new Error("Veículo não está disponível");
+
+      const existingBookings = await ctx.db
+        .query("vehicleBookings")
+        .withIndex("by_vehicleId_status", (q) => q.eq("vehicleId", args.vehicleId).eq("status", "confirmed"))
+        .collect();
+
+      for (const booking of existingBookings) {
+        if (hasDateConflict(booking.startDate, booking.endDate, args.startDate, args.endDate)) {
+          throw new Error("Veículo não está disponível nas datas selecionadas");
+        }
+      }
+
+      calculatedPrice = calculateVehicleBookingPrice(asset.pricePerDay, args.startDate, args.endDate, args.additionalDrivers);
+      finalPrice = args.finalAmount ?? calculatedPrice;
+      const startDateString = new Date(args.startDate).toISOString().split('T')[0];
+      confirmationCode = generateConfirmationCode(startDateString, customerInfo.name);
+
+      bookingData = {
+        vehicleId: args.vehicleId,
+        startDate: args.startDate,
+        endDate: args.endDate,
+        pickupLocation: args.pickupLocation,
+        returnLocation: args.returnLocation,
+        additionalDrivers: args.additionalDrivers,
+        additionalOptions: args.additionalOptions,
+        notes: args.notes,
+      };
+      emailDetails = {
+        vehicleId: asset._id,
+        startDate: args.startDate,
+        endDate: args.endDate,
+        pickupLocation: args.pickupLocation,
+        returnLocation: args.returnLocation,
+        additionalDrivers: args.additionalDrivers,
+      };
+      break;
+
+    default:
+      throw new Error("Tipo de reserva inválido");
+  }
+
+  // Determine initial status based on payment
+  if (finalPrice === 0) {
+    initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
+    initialPaymentStatus = PAYMENT_STATUS.NOT_REQUIRED;
+  } else if (asset.acceptsOnlinePayment && asset.requiresUpfrontPayment) {
+    initialStatus = bookingType === 'activity' ? BOOKING_STATUS.DRAFT : BOOKING_STATUS.AWAITING_CONFIRMATION;
+    initialPaymentStatus = PAYMENT_STATUS.PENDING;
+  } else if (!asset.requiresUpfrontPayment) {
+    initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
+    initialPaymentStatus = PAYMENT_STATUS.PENDING;
+  }
+
+  // Create booking
+  const commonBookingData = {
+    userId: user._id,
+    totalPrice: finalPrice,
+    status: initialStatus,
+    paymentStatus: initialPaymentStatus,
+    confirmationCode,
+    customerInfo,
+    specialRequests: args.specialRequests,
+    couponCode: args.couponCode,
+    discountAmount: args.discountAmount,
+    finalAmount: args.finalAmount,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  bookingId = await ctx.db.insert(`${bookingType}Bookings` as any, { ...bookingData, ...commonBookingData });
+
+  await recordRateLimitAttempt(ctx, user._id, "CREATE_BOOKING");
+
+  // Send confirmation emails if payment is not required upfront
+  if (initialPaymentStatus === PAYMENT_STATUS.NOT_REQUIRED || !asset.requiresUpfrontPayment) {
+    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
+      customerEmail: customerInfo.email,
+      customerName: customerInfo.name,
+      assetName: asset.title || asset.name,
+      bookingType,
+      confirmationCode,
+      bookingDate: bookingType === 'event' ? asset.date : args.date,
+      totalPrice: finalPrice,
+      bookingDetails: emailDetails,
+    });
+
+    const partner = await ctx.db.get(asset.partnerId);
+    if (partner && partner.email) {
+      await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendPartnerNewBookingEmail, {
+        partnerEmail: partner.email,
+        partnerName: partner.name || "Parceiro",
+        customerName: customerInfo.name,
+        customerEmail: customerInfo.email,
+        customerPhone: customerInfo.phone,
+        assetName: asset.title || asset.name,
+        bookingType,
+        confirmationCode,
+        bookingDate: bookingType === 'event' ? asset.date : args.date,
+        totalPrice: finalPrice,
+        bookingDetails: emailDetails,
+      });
+    }
+  }
+
+  return {
+    bookingId,
+    confirmationCode,
+    totalPrice: finalPrice,
+  };
+}
 
 /**
  * Create restaurant reservation
@@ -388,127 +330,11 @@ export const createRestaurantReservation = mutation({
     totalPrice: v.number(),
   }),
   handler: async (ctx, args) => {
-    // Get current user
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Usuário não autenticado");
-    }
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-
-    if (!user) {
-      throw new Error("Usuário não encontrado");
-    }
-
-    // Definir informações do cliente usando dados do usuário caso não fornecidas
-    const customerInfo = args.customerInfo ?? {
-      name: user.name || identity.name || "",
-      email: user.email || identity.email || "",
-      phone: user.phoneNumber || "",
-    };
-
-    // Validar informações do cliente
-    if (!isValidEmail(customerInfo.email)) {
-      throw new Error("Email inválido");
-    }
-    if (!isValidPhone(customerInfo.phone)) {
-      throw new Error("Telefone inválido");
-    }
-
-    // Substituir args.customerInfo por customerInfo consolidado
-    args.customerInfo = customerInfo as any;
-
-    // Get restaurant
-    const restaurant = await ctx.db.get(args.restaurantId);
-    if (!restaurant) {
-      throw new Error("Restaurante não encontrado");
-    }
-
-    if (!restaurant.isActive) {
-      throw new Error("Restaurante não está disponível");
-    }
-
-    if (!restaurant.acceptsReservations) {
-      throw new Error("Restaurante não aceita reservas");
-    }
-
-    if (args.partySize > restaurant.maximumPartySize) {
-      throw new Error("Máximo de " + restaurant.maximumPartySize + " pessoas por reserva");
-    }
-
-    const confirmationCode = generateConfirmationCode(args.date, customerInfo.name);
-
-    // Get restaurant price for calculating totalPrice
-    const totalPrice = args.finalAmount || restaurant.price || 0;
-
-    // Create reservation
-    const reservationId = await ctx.db.insert("restaurantReservations", {
-      restaurantId: args.restaurantId,
-      userId: user._id,
-      date: args.date,
-      time: args.time,
-      partySize: args.partySize,
-      name: customerInfo.name,
-      email: customerInfo.email,
-      phone: customerInfo.phone,
-      specialRequests: args.specialRequests,
-      status: BOOKING_STATUS.AWAITING_CONFIRMATION,
-      confirmationCode,
-      couponCode: args.couponCode,
-      discountAmount: args.discountAmount,
-      finalAmount: args.finalAmount,
-      totalPrice: totalPrice,
-      paymentStatus: totalPrice > 0 ? PAYMENT_STATUS.PENDING : PAYMENT_STATUS.NOT_REQUIRED,
-    });
-
-    // Send email confirmation to customer
-    await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
-      customerEmail: customerInfo.email,
-      customerName: customerInfo.name,
-      assetName: restaurant.name,
-      bookingType: "restaurant",
-      confirmationCode,
-      bookingDate: args.date + " às " + args.time,
-      totalPrice: totalPrice,
-      bookingDetails: {
-        restaurantId: restaurant._id,
-        partySize: args.partySize,
-        date: args.date,
-        time: args.time,
-        specialRequests: args.specialRequests,
-      },
-    });
-
-    // Send notification to partner about new booking
-    const partner = await ctx.db.get(restaurant.partnerId);
-    if (partner && partner.email) {
-      await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendPartnerNewBookingEmail, {
-        partnerEmail: partner.email,
-        partnerName: partner.name || "Parceiro",
-        customerName: customerInfo.name,
-        customerEmail: customerInfo.email,
-        customerPhone: customerInfo.phone,
-        assetName: restaurant.name,
-        bookingType: "restaurant",
-        confirmationCode,
-        bookingDate: args.date + " às " + args.time,
-        bookingDetails: {
-          restaurantId: restaurant._id,
-          partySize: args.partySize,
-          date: args.date,
-          time: args.time,
-          specialRequests: args.specialRequests,
-        },
-      });
-    }
-
+    const result = await _createBooking(ctx, "restaurant", args);
     return {
-      reservationId,
-      confirmationCode,
-      totalPrice,
+      reservationId: result.bookingId as Id<"restaurantReservations">,
+      confirmationCode: result.confirmationCode,
+      totalPrice: result.totalPrice,
     };
   },
 });
@@ -524,174 +350,7 @@ export const createVehicleBooking = mutation({
     confirmationCode: v.string(),
   }),
   handler: async (ctx, args) => {
-    // Get current user
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Usuário não autenticado");
-    }
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-
-    if (!user) {
-      throw new Error("Usuário não encontrado");
-    }
-
-    // Definir informações do cliente usando dados do usuário caso não fornecidas
-    const customerInfo = args.customerInfo ?? {
-      name: user.name || identity.name || "",
-      email: user.email || identity.email || "",
-      phone: user.phoneNumber || "",
-    };
-
-    // Validar informações do cliente
-    if (!isValidEmail(customerInfo.email)) {
-      throw new Error("Email inválido");
-    }
-    if (!isValidPhone(customerInfo.phone)) {
-      throw new Error("Telefone inválido");
-    }
-
-    // Substituir args.customerInfo por customerInfo consolidado
-    args.customerInfo = customerInfo as any;
-
-    // Get vehicle
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle) {
-      throw new Error("Veículo não encontrado");
-    }
-
-    if (vehicle.status !== "available") {
-      throw new Error("Veículo não está disponível");
-    }
-
-    // Check for date conflicts
-    const existingBookings = await ctx.db
-      .query("vehicleBookings")
-      .withIndex("by_vehicleId_status", (q) => 
-        q.eq("vehicleId", args.vehicleId).eq("status", "confirmed")
-      )
-      .collect();
-
-    for (const booking of existingBookings) {
-      if (hasDateConflict(booking.startDate, booking.endDate, args.startDate, args.endDate)) {
-        throw new Error("Veículo não está disponível nas datas selecionadas");
-      }
-    }
-
-    // Calculate total price
-    const calculatedPrice = calculateVehicleBookingPrice(
-      vehicle.pricePerDay,
-      args.startDate,
-      args.endDate,
-      args.additionalDrivers
-    );
-    // Use finalAmount if coupon is applied, otherwise use calculated price
-    const totalPrice = args.finalAmount ?? calculatedPrice;
-
-    // Generate confirmation code - convert timestamp to date string
-    const startDateString = new Date(args.startDate).toISOString().split('T')[0];
-    const confirmationCode = generateConfirmationCode(startDateString, customerInfo.name);
-
-    // Determine initial booking status based on payment requirement
-    let initialStatus: string = BOOKING_STATUS.DRAFT;
-    let initialPaymentStatus: string = PAYMENT_STATUS.PENDING;
-    
-    // Se o veículo não requer pagamento ou é gratuito
-    if (totalPrice === 0) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.NOT_REQUIRED;
-    }
-    // Se requer pagamento online
-    else if (vehicle.acceptsOnlinePayment && vehicle.requiresUpfrontPayment) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.PENDING;
-    }
-    // Se aceita pagamento no local
-    else if (!vehicle.requiresUpfrontPayment) {
-      initialStatus = BOOKING_STATUS.AWAITING_CONFIRMATION;
-      initialPaymentStatus = PAYMENT_STATUS.PENDING;
-    }
-
-    // Create booking
-    const bookingId = await ctx.db.insert("vehicleBookings", {
-      vehicleId: args.vehicleId,
-      userId: user._id,
-      startDate: args.startDate,
-      endDate: args.endDate,
-      totalPrice,
-      status: initialStatus,
-      paymentStatus: initialPaymentStatus,
-      confirmationCode,
-      customerInfo,
-      pickupLocation: args.pickupLocation,
-      returnLocation: args.returnLocation,
-      additionalDrivers: args.additionalDrivers,
-      additionalOptions: args.additionalOptions,
-      notes: args.notes,
-      couponCode: args.couponCode,
-      discountAmount: args.discountAmount,
-      finalAmount: args.finalAmount,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-
-    // Only send confirmation emails if payment is not required or not upfront
-    if (initialPaymentStatus === PAYMENT_STATUS.NOT_REQUIRED || !vehicle.requiresUpfrontPayment) {
-      // Send email confirmation to customer
-      await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendBookingConfirmationEmail, {
-        customerEmail: customerInfo.email,
-        customerName: customerInfo.name,
-        assetName: vehicle.name,
-        bookingType: "vehicle",
-        confirmationCode,
-        bookingDate: `${new Date(args.startDate).toLocaleDateString()} - ${new Date(args.endDate).toLocaleDateString()}`,
-        totalPrice: totalPrice,
-        bookingDetails: {
-          vehicleId: vehicle._id,
-          startDate: args.startDate,
-          endDate: args.endDate,
-          pickupLocation: args.pickupLocation,
-          returnLocation: args.returnLocation,
-          additionalDrivers: args.additionalDrivers,
-        },
-      });
-
-      // Send notification to partner about new booking
-      if (vehicle.ownerId) {
-        const partner = await ctx.db.get(vehicle.ownerId);
-        if (partner && partner.email) {
-        await ctx.scheduler.runAfter(0, internal.domains.email.actions.sendPartnerNewBookingEmail, {
-          partnerEmail: partner.email,
-          partnerName: partner.name || "Parceiro",
-          customerName: customerInfo.name,
-          customerEmail: customerInfo.email,
-          customerPhone: customerInfo.phone,
-          assetName: vehicle.name,
-          bookingType: "vehicle",
-          confirmationCode,
-          bookingDate: `${new Date(args.startDate).toLocaleDateString()} - ${new Date(args.endDate).toLocaleDateString()}`,
-          totalPrice: totalPrice,
-          bookingDetails: {
-            vehicleId: vehicle._id,
-            startDate: args.startDate,
-            endDate: args.endDate,
-            pickupLocation: args.pickupLocation,
-            returnLocation: args.returnLocation,
-            additionalDrivers: args.additionalDrivers,
-          },
-        });
-        }
-      }
-    }
-
-    return {
-      bookingId,
-      confirmationCode,
-      totalPrice,
-    };
+    return await _createBooking(ctx, "vehicle", args);
   },
 });
 
