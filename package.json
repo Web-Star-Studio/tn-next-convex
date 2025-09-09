@@ -13,7 +13,8 @@
     "browser-tools-server": "npx @agentdeskai/browser-tools-server@latest",
     "setup:subscription": "tsx scripts/setupGuideSubscription.ts",
     "test:webhook": "tsx scripts/testSubscriptionWebhook.ts",
-    "test:webhook-endpoint": "bun run scripts/testWebhookEndpoint.ts"
+    "test:webhook-endpoint": "bun run scripts/testWebhookEndpoint.ts",
+    "docs:generate": "node scripts/generateDocs.mjs"
   },
   "dependencies": {
     "@auth/core": "^0.37.0",
